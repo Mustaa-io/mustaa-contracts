@@ -62,7 +62,8 @@
     "test:reentrancyinit": "hardhat test --no-compile packages/lsp-smart-contracts/tests/Reentrancy/ReentrancyInit.test.ts"
   },
   "dependencies": {
-    "@erc725/smart-contracts-v8": "npm:@erc725/smart-contracts@8.0.0"
+    "@erc725/smart-contracts-v8": "npm:@erc725/smart-contracts@8.0.0",
+    "@openzeppelin/contracts": "^5.2.0"
   },
   "devDependencies": {
     "@b00ste/hardhat-dodoc": "^0.3.16",

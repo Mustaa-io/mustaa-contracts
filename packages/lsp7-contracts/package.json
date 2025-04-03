@@ -47,10 +47,10 @@
     "package": "hardhat prepare-package"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^4.9.6",
     "@lukso/lsp1-contracts": "~0.15.0",
+    "@lukso/lsp17contractextension-contracts": "~0.16.0",
     "@lukso/lsp2-contracts": "~0.15.0",
     "@lukso/lsp4-contracts": "~0.16.0",
-    "@lukso/lsp17contractextension-contracts": "~0.16.0"
+    "@openzeppelin/contracts": "^4.9.6"
   }
 }
