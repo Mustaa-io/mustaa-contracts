@@ -9,11 +9,11 @@ import {ILSP7DigitalAsset} from "./ILSP7DigitalAsset.sol";
 
 // modules
 import {
-    EnumerableSet
-} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+    EnumerableSetUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/structs/EnumerableSetUpgradeable.sol";
 import {
-    ERC165Checker
-} from "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
+    ERC165CheckerUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165CheckerUpgradeable.sol";
 import {
     LSP4DigitalAssetMetadataInitAbstract,
     ERC725YInitAbstract
@@ -73,13 +73,15 @@ import {
  * This implementation is agnostic to the way tokens are created.
  * A supply mechanism has to be added in a derived contract using {_mint}
  * For a generic mechanism, see {LSP7MintableInitAbstract}.
+ * 
+ * @custom:oz-upgrades-unsafe-allow delegatecall
  */
 abstract contract LSP7DigitalAssetInitAbstract is
     ILSP7DigitalAsset,
     LSP4DigitalAssetMetadataInitAbstract,
     LSP17Extendable
 {
-    using EnumerableSet for EnumerableSet.AddressSet;
+    using EnumerableSetUpgradeable for EnumerableSetUpgradeable.AddressSet;
 
     // --- Storage
 
@@ -91,7 +93,7 @@ abstract contract LSP7DigitalAssetInitAbstract is
     mapping(address => uint256) internal _tokenOwnerBalances;
 
     // Mapping an `address` to its authorized operator addresses.
-    mapping(address => EnumerableSet.AddressSet) internal _operators;
+    mapping(address => EnumerableSetUpgradeable.AddressSet) internal _operators;
 
     // Mapping a `tokenOwner` to an `operator` to `amount` of tokens.
     mapping(address => mapping(address => uint256))
@@ -286,7 +288,7 @@ abstract contract LSP7DigitalAssetInitAbstract is
         for (uint256 i; i < data.length; ) {
             (bool success, bytes memory result) = address(this).delegatecall(
                 data[i]
-            );
+            );  
 
             if (!success) {
                 // Look for revert reason and bubble it up if present
@@ -915,7 +917,7 @@ abstract contract LSP7DigitalAssetInitAbstract is
         bytes memory lsp1Data
     ) internal virtual {
         if (
-            ERC165Checker.supportsERC165InterfaceUnchecked(
+            ERC165CheckerUpgradeable.supportsERC165InterfaceUnchecked(
                 to,
                 _INTERFACEID_LSP1
             )

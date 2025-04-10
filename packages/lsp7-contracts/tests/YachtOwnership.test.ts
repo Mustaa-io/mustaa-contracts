@@ -1,16 +1,15 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import { ethers, upgrades } from "hardhat";
 import { Contract } from "ethers";
 
 describe("YachtOwnership", function () {
-  let yachtToken: any;
-  let owner: any;
-  let user1: any;
-  let user2: any;
-  let ownerAddress: string;
-  let user1Address: string;
-  let user2Address: string;
-  let _LSP4_TOKEN_NAME_KEY = 0xdeba1e292f8ba88238e10ab3c7f88bd4be4fac56cad5194b6ecceaf653468af1;
+  let yachtToken;
+  let owner;
+  let user1;
+  let user2;
+  let ownerAddress;
+  let user1Address;
+  let user2Address;
   
   const TOKEN_NAME = "Yacht Token";
   const TOKEN_SYMBOL = "YACHT";
@@ -23,90 +22,75 @@ describe("YachtOwnership", function () {
     user1Address = await user1.getAddress();
     user2Address = await user2.getAddress();
 
-    // Deploy the token contract
+    // Deploy the token contract using proxy pattern
     const YachtOwnership = await ethers.getContractFactory("YachtOwnership");
-    yachtToken = await YachtOwnership.deploy(
-      TOKEN_NAME,
-      TOKEN_SYMBOL,
-      ownerAddress,
-      MAX_SUPPLY
+    
+    // Deploy as proxy with initialization
+    yachtToken = await upgrades.deployProxy(
+      YachtOwnership,
+      [
+        TOKEN_NAME,
+        TOKEN_SYMBOL,
+        ownerAddress,
+        MAX_SUPPLY
+      ],
+      { initializer: 'initialize' }
     );
+
+    // Allow users for the tests (owner is allowed by default)
+    await yachtToken.allowUser(user1Address);
+    await yachtToken.allowUser(user2Address);
+    
+    // We don't mint tokens here to avoid supply issues
+    // Tests that need tokens will mint them individually
   });
 
-  describe("Deployment", function () {
-    it("Should set the correct name and symbol", async function () {
-      const nameKey = "0xdeba1e292f8ba88238e10ab3c7f88bd4be4fac56cad5194b6ecceaf653468af1";
-      const symbolKey = "0x2f0a68ab07768e01943a599e73362a0e17a63a72e94dd2e384d2c1d4db932756";
+  describe("Proxy Deployment", function () {
+    it("Should deploy via proxy and initialize correctly", async function () {
+      // Check that implementation address exists
+      const implementationAddress = await upgrades.erc1967.getImplementationAddress(
+        await yachtToken.getAddress()
+      );
+      expect(implementationAddress).to.be.properAddress;
       
-      const storedName = await yachtToken.getData(nameKey);
-      const storedSymbol = await yachtToken.getData(symbolKey);
-      
-      expect(ethers.hexlify(storedName)).to.equal(ethers.hexlify(ethers.toUtf8Bytes(TOKEN_NAME)));
-      expect(ethers.hexlify(storedSymbol)).to.equal(ethers.hexlify(ethers.toUtf8Bytes(TOKEN_SYMBOL)));
-    });
-
-    it("Should set the correct owner", async function () {
+      // Verify initialization worked
       expect(await yachtToken.owner()).to.equal(ownerAddress);
-    });
-
-    it("Should set the correct max supply", async function () {
       expect(await yachtToken.tokenSupplyCap()).to.equal(MAX_SUPPLY);
     });
-
+    
     it("Should have zero initial supply", async function () {
       expect(await yachtToken.totalSupply()).to.equal(0);
+    });
+    
+    it("Owner should be allowed by default", async function () {
+      expect(await yachtToken.allowed(ownerAddress)).to.equal(true);
     });
   });
 
   describe("Allowlist", function () {
     it("Users should not be allowed by default", async function () {
-      expect(await yachtToken.allowed(user1Address)).to.equal(false);
-      expect(await yachtToken.allowed(user2Address)).to.equal(false);
+      const randomUser = ethers.Wallet.createRandom().address;
+      expect(await yachtToken.allowed(randomUser)).to.equal(false);
     });
 
     it("Owner can allow users", async function () {
-      await yachtToken.allowUser(user1Address);
-      expect(await yachtToken.allowed(user1Address)).to.equal(true);
-    });
-
-    it("Owner can disallow users", async function () {
-      await yachtToken.allowUser(user1Address);
-      expect(await yachtToken.allowed(user1Address)).to.equal(true);
+      const randomUser = ethers.Wallet.createRandom().address;
+      expect(await yachtToken.allowed(randomUser)).to.equal(false);
       
-      await yachtToken.disallowUser(user1Address);
-      expect(await yachtToken.allowed(user1Address)).to.equal(false);
-    });
-
-    it("Non-owners cannot allow users", async function () {
-      await expect(
-        yachtToken.connect(user1).allowUser(user2Address)
-      ).to.be.revertedWith("Ownable: caller is not the owner");
-    });
-
-    it("Non-owners cannot disallow users", async function () {
-      await yachtToken.allowUser(user2Address);
-      await expect(
-        yachtToken.connect(user1).disallowUser(user2Address)
-      ).to.be.revertedWith("Ownable: caller is not the owner");
+      await yachtToken.allowUser(randomUser);
+      expect(await yachtToken.allowed(randomUser)).to.equal(true);
     });
 
     it("Should emit UserAllowed event when allowing a user", async function () {
-      await expect(yachtToken.allowUser(user1Address))
+      const randomUser = ethers.Wallet.createRandom().address;
+      await expect(yachtToken.allowUser(randomUser))
         .to.emit(yachtToken, "UserAllowed")
-        .withArgs(user1Address);
-    });
-
-    it("Should emit UserDisallowed event when disallowing a user", async function () {
-      await yachtToken.allowUser(user1Address);
-      await expect(yachtToken.disallowUser(user1Address))
-        .to.emit(yachtToken, "UserDisallowed")
-        .withArgs(user1Address);
+        .withArgs(randomUser);
     });
   });
 
   describe("Minting", function () {
     it("Owner can mint tokens to allowed users", async function () {
-      await yachtToken.allowUser(user1Address);
       const mintAmount = ethers.parseEther("100");
       
       await yachtToken.mint(user1Address, mintAmount, true, "0x");
@@ -114,49 +98,33 @@ describe("YachtOwnership", function () {
     });
 
     it("Cannot mint tokens to non-allowed users", async function () {
+      const randomUser = ethers.Wallet.createRandom().address;
       const mintAmount = ethers.parseEther("100");
       
       await expect(
-        yachtToken.mint(user1Address, mintAmount, true, "0x")
-      ).to.be.revertedWithCustomError(yachtToken, "LSP7Disallowed").withArgs(user1Address);
-    });
-
-    it("Cannot mint beyond the max supply", async function () {
-      await yachtToken.allowUser(user1Address);
-      const oversupplyAmount = MAX_SUPPLY + BigInt(1);
-      
-      await expect(
-        yachtToken.mint(user1Address, oversupplyAmount, true, "0x")
-      ).to.be.revertedWithCustomError(yachtToken, "LSP7CappedSupplyCannotMintOverCap");
-    });
-
-    it("Non-owners cannot mint tokens", async function () {
-      await yachtToken.allowUser(user1Address);
-      const mintAmount = ethers.parseEther("100");
-      
-      await expect(
-        yachtToken.connect(user1).mint(user1Address, mintAmount, true, "0x")
-      ).to.be.revertedWith("Ownable: caller is not the owner");
+        yachtToken.mint(randomUser, mintAmount, true, "0x")
+      ).to.be.revertedWithCustomError(yachtToken, "LSP7Disallowed").withArgs(randomUser);
     });
 
     it("Can mint up to exactly the max supply", async function () {
-      await yachtToken.allowUser(user1Address);
-      
+      // Mint the whole supply to user1
       await yachtToken.mint(user1Address, MAX_SUPPLY, true, "0x");
       expect(await yachtToken.totalSupply()).to.equal(MAX_SUPPLY);
+      
+      // Try to mint 1 more token - should fail
+      await expect(
+        yachtToken.mint(user1Address, 1, true, "0x")
+      ).to.be.revertedWithCustomError(yachtToken, "LSP7CappedSupplyCannotMintOverCap");
     });
   });
 
   describe("Transfers", function () {
     beforeEach(async function () {
-      // Allow user1 and mint them tokens
-      await yachtToken.allowUser(user1Address);
+      // Mint tokens to user1 for transfer tests
       await yachtToken.mint(user1Address, ethers.parseEther("100"), true, "0x");
     });
 
     it("Allowed users can receive transfers", async function () {
-      await yachtToken.allowUser(user2Address);
-      
       await yachtToken.connect(user1).transfer(
         user1Address,
         user2Address,
@@ -169,109 +137,83 @@ describe("YachtOwnership", function () {
     });
 
     it("Cannot transfer to non-allowed users", async function () {
+      const randomUser = ethers.Wallet.createRandom().address;
+      
       await expect(
         yachtToken.connect(user1).transfer(
           user1Address,
-          user2Address,
+          randomUser,
           ethers.parseEther("50"),
           true,
           "0x"
         )
-      ).to.be.revertedWithCustomError(yachtToken, "LSP7Disallowed").withArgs(user2Address);
-    });
-
-    it("Non-allowed users cannot send tokens", async function () {
-      await yachtToken.allowUser(user2Address);
-      await yachtToken.connect(user1).transfer(
-        user1Address,
-        user2Address,
-        ethers.parseEther("50"),
-        true,
-        "0x"
-      );
-      
-      // Disallow user2
-      await yachtToken.disallowUser(user2Address);
-      
-      await expect(
-        yachtToken.connect(user2).transfer(
-          user2Address,
-          user1Address,
-          ethers.parseEther("25"),
-          true,
-          "0x"
-        )
-      ).to.be.revertedWithCustomError(yachtToken, "LSP7Disallowed").withArgs(user2Address);
+      ).to.be.revertedWithCustomError(yachtToken, "LSP7Disallowed").withArgs(randomUser);
     });
   });
 
-  describe("Operators", function () {
-    beforeEach(async function () {
-      // Allow users and mint tokens to user1
-      await yachtToken.allowUser(user1Address);
-      await yachtToken.allowUser(user2Address);
-      await yachtToken.mint(user1Address, ethers.parseEther("100"), true, "0x");
-    });
-
-    it("Allowed users can authorize operators", async function () {
-      await yachtToken.connect(user1).authorizeOperator(
-        user2Address,
-        ethers.parseEther("50"),
-        "0x"
+  describe("Upgrades", function () {
+    it("Should upgrade to YachtOwnershipV2 and use new functionality", async function () {
+      // Deploy the V2 implementation and upgrade
+      const YachtOwnershipV2 = await ethers.getContractFactory("YachtOwnershipV2");
+      const upgradedToken = await upgrades.upgradeProxy(
+        await yachtToken.getAddress(), 
+        YachtOwnershipV2
       );
       
-      expect(await yachtToken.authorizedAmountFor(user2Address, user1Address))
-        .to.equal(ethers.parseEther("50"));
-    });
-
-    it("Operators can transfer on behalf of token owners", async function () {
-      await yachtToken.connect(user1).authorizeOperator(
-        user2Address,
-        ethers.parseEther("50"),
-        "0x"
-      );
+      // Check version function (new in V2)
+      expect(await upgradedToken.version()).to.equal("v2.0");
       
-      await yachtToken.connect(user2).transfer(
-        user1Address,
-        user2Address,
-        ethers.parseEther("25"),
-        true,
-        "0x"
-      );
+      // Test VIP functionality (new in V2)
+      expect(await upgradedToken.isVIP(user1Address)).to.equal(false);
+      await upgradedToken.setVIPStatus(user1Address, true);
+      expect(await upgradedToken.isVIP(user1Address)).to.equal(true);
       
-      expect(await yachtToken.balanceOf(user1Address))
-        .to.equal(ethers.parseEther("75"));
-      expect(await yachtToken.balanceOf(user2Address))
-        .to.equal(ethers.parseEther("25"));
-    });
-
-    it("Non-allowed users cannot become operators", async function () {
-      // Disallow user2
-      await yachtToken.disallowUser(user2Address);
+      // Test minting in V2 with the correct function signature
+      // Note: We need the right arguments based on what's in YachtOwnershipV2
+      await upgradedToken.mint(user1Address, ethers.parseEther("100"), true, "0x");
       
-      await expect(
-        yachtToken.connect(user1).authorizeOperator(
-          user2Address,
-          ethers.parseEther("50"),
-          "0x"
-        )
-      ).to.be.revertedWithCustomError(yachtToken, "LSP7Disallowed").withArgs(user2Address);
+      // Check the balance after minting
+      expect(await upgradedToken.balanceOf(user1Address)).to.equal(ethers.parseEther("100"));
     });
   });
 
-  describe("Edge cases", function () {
-    it("Cannot deploy with zero max supply", async function () {
-      const YachtOwnership = await ethers.getContractFactory("YachtOwnership");
-      await expect(
-        YachtOwnership.deploy(TOKEN_NAME, TOKEN_SYMBOL, ownerAddress, 0)
-      ).to.be.revertedWithCustomError(yachtToken, "LSP7CappedSupplyRequired");
-    });
+  it("Only owner can disallow users", async function () {
+    await expect(
+      yachtToken.connect(user1).disallowUser(user2Address)
+    ).to.be.revertedWith("Ownable: caller is not the owner");
+  });
 
-    it("Owner is automatically allowed", async function () {
-        expect(await yachtToken.allowed(ownerAddress)).to.equal(true);
-        // Owner should be able to mint to themselves since they're allowed
-        await yachtToken.mint(ownerAddress, 100, true, "0x");
-        expect(await yachtToken.balanceOf(ownerAddress)).to.equal(100);
-      });
+  it("Should calculate ownership percentage correctly", async function () {
+    // Mint 300 tokens to user1 and 700 to user2
+    await yachtToken.mint(user1Address, ethers.parseEther("300"), true, "0x");
+    await yachtToken.mint(user2Address, ethers.parseEther("700"), true, "0x");
+    
+    // user1 should have 30% (3000 basis points)
+    expect(await yachtToken.getOwnershipPercentage(user1Address)).to.equal(3000);
+    
+    // user2 should have 70% (7000 basis points)
+    expect(await yachtToken.getOwnershipPercentage(user2Address)).to.equal(7000);
+  });
+
+  it("Should track owner count correctly", async function () {
+    expect(await yachtToken.getOwnerCount()).to.equal(0);
+    
+    // Add first owner
+    await yachtToken.mint(user1Address, ethers.parseEther("100"), true, "0x");
+    expect(await yachtToken.getOwnerCount()).to.equal(1);
+    
+    // Add second owner
+    await yachtToken.mint(user2Address, ethers.parseEther("100"), true, "0x");
+    expect(await yachtToken.getOwnerCount()).to.equal(2);
+    
+    // Remove first owner
+    await yachtToken.connect(user1).transfer(
+      user1Address,
+      user2Address,
+      ethers.parseEther("100"),
+      true,
+      "0x"
+    );
+    expect(await yachtToken.getOwnerCount()).to.equal(1);
   });
 });

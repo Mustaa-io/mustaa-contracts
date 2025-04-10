@@ -3,7 +3,10 @@
 pragma solidity ^0.8.4;
 
 // modules
-import {LSP7DigitalAsset} from "./LSP7DigitalAsset.sol";
+import {LSP7DigitalAssetInitAbstract} from "./LSP7DigitalAssetInitAbstract.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
  * @title YachtOwnership - A controlled digital asset contract for yacht ownership
@@ -22,11 +25,21 @@ import {LSP7DigitalAsset} from "./LSP7DigitalAsset.sol";
  * before they can participate in any token operations, and can be removed
  * via {_disallowUser} if needed.
  */
-contract YachtOwnership is LSP7DigitalAsset {
+contract YachtOwnership is 
+    Initializable,
+    OwnableUpgradeable,
+    UUPSUpgradeable,
+    LSP7DigitalAssetInitAbstract
+{
     /**
      * @dev Allowed status of addresses. True if allowed, False otherwise.
      */
     mapping(address => bool) private _allowed;
+
+    /**
+     * @dev Is owner mapping. True if address has non-zero balance.
+     */
+    mapping(address => bool) private _isOwner;
 
     /**
      * @dev Emitted when a `user` is allowed to transfer and approve.
@@ -37,6 +50,16 @@ contract YachtOwnership is LSP7DigitalAsset {
      * @dev Emitted when a user is disallowed.
      */
     event UserDisallowed(address indexed user);
+
+    /**
+     * @dev Emitted when a user acquires ownership tokens (balance > 0).
+     */
+    event OwnershipAcquired(address indexed owner);
+
+    /**
+     * @dev Emitted when a user loses ownership tokens (balance == 0).
+     */
+    event OwnershipLost(address indexed previousOwner);
 
     /**
      * @dev The operation failed because the user is not allowed.
@@ -56,7 +79,11 @@ contract YachtOwnership is LSP7DigitalAsset {
     error LSP7CappedSupplyCannotMintOverCap();
 
     // --- Storage
-    uint256 private immutable _TOKEN_SUPPLY_CAP;
+    uint256 private _tokenSupplyCap;
+    uint256 private _ownerCount;
+    
+    // Add a gap to prevent storage clashes in future upgrades
+    uint256[50] private __gap;
 
     /**
      * @notice Deploying a `LSP7Mintable` token contract with: token name = `name_`, token symbol = `symbol_`, and
@@ -75,26 +102,86 @@ contract YachtOwnership is LSP7DigitalAsset {
      * @custom:requirements
      * - `tokenSupplyCap_` MUST NOT be 0.
      */
-    constructor(
+    function initialize(
         string memory name_,
         string memory symbol_,
         address newOwner_,
         uint256 tokenSupplyCap_
-    )
-        LSP7DigitalAsset(
+    ) public virtual initializer {
+        // Initialize parent contracts
+        __Ownable_init();
+        __UUPSUpgradeable_init();
+
+        _initialize(
             name_,
             symbol_,
             newOwner_,
-            0,
-            false
-        )
-    {
+            0, // lsp4TokenType
+            false // isNonDivisible
+        );
+        
         if (tokenSupplyCap_ == 0) {
             revert LSP7CappedSupplyRequired();
         }
 
-        _TOKEN_SUPPLY_CAP = tokenSupplyCap_;
+        _tokenSupplyCap = tokenSupplyCap_;
         _allowUser(newOwner_);
+    }
+
+    /**
+     * @dev Function that authorizes upgrades to the contract.
+     * Only the contract owner can upgrade the implementation.
+     */
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    /**
+     * @notice Check if an address is an owner (has non-zero balance)
+     * @param account The address to check
+     * @return True if the address has a non-zero token balance
+     */
+    function isOwner(address account) public view returns (bool) {
+        return _isOwner[account];
+    }
+
+    /**
+     * @notice Get the total number of owners
+     * @return The count of addresses with non-zero balances
+     */
+    function getOwnerCount() public view returns (uint256) {
+        return _ownerCount;
+    }
+
+    /**
+     * @notice Calculate an address's ownership percentage in basis points (1/100 of percent)
+     * @param account The address to calculate percentage for
+     * @return Percentage in basis points (100 = 1%, 10000 = 100%)
+     */
+    function getOwnershipPercentage(address account) public view returns (uint256) {
+        if (!_isOwner[account]) return 0;
+        
+        uint256 totalTokens = totalSupply();
+        if (totalTokens == 0) return 0;
+        
+        return (balanceOf(account) * 10000) / totalTokens;
+    }
+
+    /**
+     * @dev Internal function to update ownership status
+     * @param account The address to update
+     */
+    function _updateOwnershipStatus(address account) internal {
+        uint256 balance = balanceOf(account);
+        bool isCurrentlyOwner = _isOwner[account];
+        
+        if (balance > 0 && !isCurrentlyOwner) {
+            _isOwner[account] = true;
+            _ownerCount++;
+            emit OwnershipAcquired(account);
+        } else if (balance == 0 && isCurrentlyOwner) {
+            _isOwner[account] = false;
+            _ownerCount--;
+            emit OwnershipLost(account);
+        }
     }
 
     /**
@@ -106,7 +193,7 @@ contract YachtOwnership is LSP7DigitalAsset {
      * @return The maximum number of tokens that can exist in the contract.
      */
     function tokenSupplyCap() public view virtual returns (uint256) {
-        return _TOKEN_SUPPLY_CAP;
+        return _tokenSupplyCap;
     }
 
     /**
@@ -147,6 +234,15 @@ contract YachtOwnership is LSP7DigitalAsset {
         if (from != address(0) && !allowed(from)) revert LSP7Disallowed(from);
         if (to != address(0) && !allowed(to)) revert LSP7Disallowed(to);
         super._update(from, to, amount, force, data);
+
+        // Update ownership status after balance changes
+        if (from != address(0)) {
+            _updateOwnershipStatus(from);
+        }
+        
+        if (to != address(0)) {
+            _updateOwnershipStatus(to);
+        }
     }
 
     /**
@@ -177,6 +273,8 @@ contract YachtOwnership is LSP7DigitalAsset {
         }
 
         super._mint(to, amount, force, data);
+
+        _updateOwnershipStatus(to);
     }
 
     /**

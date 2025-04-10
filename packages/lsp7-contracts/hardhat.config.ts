@@ -2,6 +2,7 @@ import { HardhatUserConfig } from 'hardhat/config';
 import { NetworkUserConfig } from 'hardhat/types';
 import { config as dotenvConfig } from 'dotenv';
 import { resolve } from 'path';
+import '@openzeppelin/hardhat-upgrades';
 
 /**
  * this package includes:

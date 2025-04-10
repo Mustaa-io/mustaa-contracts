@@ -63,13 +63,16 @@
   },
   "dependencies": {
     "@erc725/smart-contracts-v8": "npm:@erc725/smart-contracts@8.0.0",
-    "@openzeppelin/contracts": "^5.2.0"
+    "@openzeppelin/contracts": "^5.2.0",
+    "@openzeppelin/contracts-upgradeable": "^5.2.0"
   },
   "devDependencies": {
     "@b00ste/hardhat-dodoc": "^0.3.16",
     "@erc725/erc725.js": "0.23.0",
     "@lukso/eip191-signer.js": "^0.2.2",
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.13",
     "@nomiclabs/hardhat-web3": "^2.0.0",
     "@turbo/gen": "^1.12.3",
     "@typechain/ethers-v6": "^0.5.1",
