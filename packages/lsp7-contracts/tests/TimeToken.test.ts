@@ -5,6 +5,7 @@ import { Contract } from "ethers";
 describe("TimeToken", function () {
   let timeToken: any;
   let yachtToken: any;
+  let allowList: any;
   let owner: any;
   let mustaa: any;
   let owner1: any;
@@ -29,7 +30,21 @@ describe("TimeToken", function () {
     owner1Address = await owner1.getAddress();
     owner2Address = await owner2.getAddress();
 
-    // First deploy YachtOwnership
+    // First deploy the AllowList
+    const AllowList = await ethers.getContractFactory("AllowList");
+    allowList = await upgrades.deployProxy(
+      AllowList,
+      [ownerAddress],
+      { initializer: 'initialize' }
+    );
+
+    // Allow all test users
+    await allowList.allowUser(ownerAddress);
+    await allowList.allowUser(mustaaAddress);
+    await allowList.allowUser(owner1Address);
+    await allowList.allowUser(owner2Address);
+
+    // Deploy YachtOwnership
     const YachtOwnership = await ethers.getContractFactory("YachtOwnership");
     yachtToken = await upgrades.deployProxy(
       YachtOwnership,
@@ -37,16 +52,13 @@ describe("TimeToken", function () {
         YACHT_TOKEN_NAME,
         YACHT_TOKEN_SYMBOL,
         ownerAddress,
-        MAX_SUPPLY
+        MAX_SUPPLY,
+        await allowList.getAddress()
       ],
       { initializer: 'initialize' }
     );
 
-    // Allow users and mint yacht tokens
-    await yachtToken.allowUser(owner1Address);
-    await yachtToken.allowUser(owner2Address);
-    await yachtToken.allowUser(mustaaAddress);
-    // Mint 50-50 ownership to owner1 and owner2
+    // Mint yacht tokens for ownership percentages
     await yachtToken.mint(owner1Address, ethers.parseEther("500"), true, "0x");
     await yachtToken.mint(owner2Address, ethers.parseEther("500"), true, "0x");
 
@@ -61,6 +73,7 @@ describe("TimeToken", function () {
         mustaaAddress,
         [owner1Address, owner2Address],
         await yachtToken.getAddress(),
+        await allowList.getAddress(),
         STARTING_YEAR,
         5
       ],
@@ -79,13 +92,13 @@ describe("TimeToken", function () {
       // Verify initialization worked
       const decimalsFactor = BigInt(10) ** BigInt(1);
       // Mustaa should get 282 tokens (leap year 2024)
-      expect(await timeToken.yearlyBalances(2024, mustaaAddress))
+      expect(await timeToken.balanceOfYear(mustaaAddress, 2024))
         .to.equal(BigInt(282) * decimalsFactor);
       
       // Each owner should get 42 tokens (50% of 84 tokens)
-      expect(await timeToken.yearlyBalances(2024, owner1Address))
+      expect(await timeToken.balanceOfYear(owner1Address, 2024))
         .to.equal(BigInt(42) * decimalsFactor);
-      expect(await timeToken.yearlyBalances(2024, owner2Address))
+      expect(await timeToken.balanceOfYear(owner2Address, 2024))
         .to.equal(BigInt(42) * decimalsFactor);
     });
 
@@ -102,13 +115,13 @@ describe("TimeToken", function () {
         const mustaaShare = isLeapYear ? 282 : 281;
         
         // Check Mustaa's balance
-        expect(await timeToken.yearlyBalances(year, mustaaAddress))
+        expect(await timeToken.balanceOfYear(mustaaAddress, year))
           .to.equal(BigInt(mustaaShare) * decimalsFactor);
         
         // Check owners' balances (42 tokens each - 50% of 84)
-        expect(await timeToken.yearlyBalances(year, owner1Address))
+        expect(await timeToken.balanceOfYear(owner1Address, year))
           .to.equal(BigInt(42) * decimalsFactor);
-        expect(await timeToken.yearlyBalances(year, owner2Address))
+        expect(await timeToken.balanceOfYear(owner2Address, year))
           .to.equal(BigInt(42) * decimalsFactor);
       }
     });
@@ -122,26 +135,6 @@ describe("TimeToken", function () {
       
       // Check version function (new in V2)
       expect(await upgradedToken.version()).to.equal("v2.0");
-      
-      // Test discount functionality
-      // Set a 20% discount for Mustaa
-      await upgradedToken.setDiscount(mustaaAddress, 20);
-      expect(await upgradedToken.discountRates(mustaaAddress)).to.equal(20);
-      
-      // Calculate tokens needed before booking
-      const year = 2024;
-      const daysToBook = 5;
-      const decimalsFactor = BigInt(10) ** BigInt(1);
-      const initialBalance = await upgradedToken.yearlyBalances(year, mustaaAddress);
-      
-      // Book days - with 20% discount, should use 4 tokens for 5 days
-      await upgradedToken.connect(mustaa).book(daysToBook, year);
-      
-      // Should use 80% of tokens (20% discount)
-      const discountedTokenAmount = BigInt(daysToBook) * decimalsFactor * BigInt(80) / BigInt(100);
-      const expectedFinalBalance = initialBalance - discountedTokenAmount;
-      
-      expect(await upgradedToken.yearlyBalances(year, mustaaAddress)).to.equal(expectedFinalBalance);
     });
   });
 
@@ -160,6 +153,7 @@ describe("TimeToken", function () {
             mustaaAddress,
             [nonOwner.address], // Using non-owner address
             await yachtToken.getAddress(),
+            await allowList.getAddress(),
             STARTING_YEAR,
             5
           ],
@@ -178,14 +172,15 @@ describe("TimeToken", function () {
           "Test Yacht", 
           "TEST", 
           ownerAddress, 
-          MAX_SUPPLY
+          MAX_SUPPLY,
+          await allowList.getAddress()
         ],
         { initializer: 'initialize' }
       );
       
       // Allow owners but mint a split that doesn't equal 100%
-      await testYachtToken.allowUser(owner1Address);
-      await testYachtToken.allowUser(owner2Address);
+      await allowList.allowUser(owner1Address);
+      await allowList.allowUser(owner2Address);
       
       // Mint 90% to owner1 and only 5% to owner2 (total 95%)
       await testYachtToken.mint(owner1Address, ethers.parseEther("900"), true, "0x");
@@ -203,6 +198,7 @@ describe("TimeToken", function () {
             mustaaAddress,
             [owner1Address, owner2Address],
             await testYachtToken.getAddress(), // Use our test yacht token
+            await allowList.getAddress(),
             STARTING_YEAR,
             5
           ],
@@ -234,257 +230,438 @@ describe("TimeToken", function () {
     });
   });
 
-  describe("Booking functionality", function () {
-    it("Should allow Mustaa to book days", async function () {
-      const daysToBook = 5;
-      const year = 2024;
-      const decimalsFactor = BigInt(10) ** BigInt(1);
-      const initialBalance = await timeToken.yearlyBalances(year, mustaaAddress);
-
-      await timeToken.connect(mustaa).book(daysToBook, year);
-
-      const finalBalance = await timeToken.yearlyBalances(year, mustaaAddress);
-      expect(finalBalance).to.equal(initialBalance - (BigInt(daysToBook) * decimalsFactor));
-    });
-
-    it("Should allow owner to book days", async function () {
-      const daysToBook = 3;
-      const year = 2024;
-      const decimalsFactor = BigInt(10) ** BigInt(1);
-      const initialBalance = await timeToken.yearlyBalances(year, owner1Address);
-
-      await timeToken.connect(owner1).book(daysToBook, year);
-
-      const finalBalance = await timeToken.yearlyBalances(year, owner1Address);
-      expect(finalBalance).to.equal(initialBalance - (BigInt(daysToBook) * decimalsFactor));
-    });
-
-    it("Should allow booking and cancellation with correct token return", async function () {
-      const daysToBook = 5;
-      const year = 2024;
-      const decimalsFactor = BigInt(10) ** BigInt(1);
-      const initialBalance = await timeToken.yearlyBalances(year, mustaaAddress);
-
-      // Book days
-      await timeToken.connect(mustaa).book(daysToBook, year);
-      
-      // Cancel booking
-      await timeToken.connect(mustaa).cancelBooking(daysToBook, year, mustaaAddress);
-
-      // Check if balance is restored
-      const finalBalance = await timeToken.yearlyBalances(year, mustaaAddress);
-      expect(finalBalance).to.equal(initialBalance);
-    });
-
-    it("Should revert when trying to book more days than available", async function () {
-      const year = 2024;
-      const tooManyDays = 300;  // More than any single party's allocation
-      const decimalsFactor = BigInt(10) ** BigInt(1);
-
-      await expect(
-        timeToken.connect(mustaa).book(tooManyDays, year)
-      ).to.be.revertedWithCustomError(timeToken, "InsufficientBalance")
-        .withArgs(year, await timeToken.yearlyBalances(year, mustaaAddress), BigInt(tooManyDays) * decimalsFactor);
-    });
-  });
-
   describe("Year-specific transfer functionality", function () {
     let nonAllowedUser: any;
     
     beforeEach(async function () {
-      // Set up a non-allowed user for testing
-      nonAllowedUser = (await ethers.getSigners())[5];
-    });
-    
-    it("Should revert when using the standard transfer function", async function () {
-      await expect(
-        timeToken.connect(mustaa).transfer(
-          mustaaAddress,
-          owner1Address,
-          ethers.parseEther("1"),
-          true,
-          "0x"
-        )
-      ).to.be.revertedWith("Use transferForYear instead");
+        nonAllowedUser = (await ethers.getSigners())[5];
     });
     
     it("Should allow transferring tokens for a specific year", async function () {
-      const year = 2024;
-      const transferAmount = BigInt(5); // 0.5 tokens (with 1 decimal)
-      const decimalsFactor = BigInt(10);
-      
-      const mustaaInitialBalance = await timeToken.yearlyBalances(year, mustaaAddress);
-      const owner1InitialBalance = await timeToken.yearlyBalances(year, owner1Address);
-      
-      // Transfer from Mustaa to owner1
-      await timeToken.connect(mustaa).transferForYear(
-        mustaaAddress,
-        owner1Address,
-        transferAmount * decimalsFactor,
-        year,
-        true,
-        "0x"
-      );
-      
-      // Check balances were updated correctly
-      expect(await timeToken.yearlyBalances(year, mustaaAddress))
-        .to.equal(mustaaInitialBalance - (transferAmount * decimalsFactor));
-      expect(await timeToken.yearlyBalances(year, owner1Address))
-        .to.equal(owner1InitialBalance + (transferAmount * decimalsFactor));
+        const year = 2024;
+        const transferAmount = BigInt(5); // 0.5 tokens (with 1 decimal)
+        const decimalsFactor = BigInt(10);
+        
+        const mustaaInitialBalance = await timeToken.balanceOfYear(mustaaAddress, year);
+        const owner1InitialBalance = await timeToken.balanceOfYear(owner1Address, year);
+        
+        // Encode the year in the data parameter
+        const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
+        
+        // Transfer from Mustaa to owner1
+        await timeToken.connect(mustaa).transfer(
+            mustaaAddress,
+            owner1Address,
+            transferAmount * decimalsFactor,
+            true,
+            data
+        );
+        
+        expect(await timeToken.balanceOfYear(mustaaAddress, year))
+            .to.equal(mustaaInitialBalance - (transferAmount * decimalsFactor));
+        expect(await timeToken.balanceOfYear(owner1Address, year))
+            .to.equal(owner1InitialBalance + (transferAmount * decimalsFactor));
+    });
+    
+    it("Should emit transfer event with year information", async function () {
+        const year = 2024;
+        const transferAmount = BigInt(5);
+        const decimalsFactor = BigInt(10);
+        
+        const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
+        
+        const tx = await timeToken.connect(mustaa).transfer(
+            mustaaAddress,
+            owner1Address,
+            transferAmount * decimalsFactor,
+            true,
+            data
+        );
+        
+        const receipt = await tx.wait();
+        
+        // Debug: log all events to see what's available
+        console.log("Events in transaction:", receipt.events?.map(e => e.event || e.eventName));
+        
+        // Try to find the Transfer event - try both property names
+        let transferEvent = receipt.events?.find(e => e.event === "Transfer" || e.eventName === "Transfer");
+        
+        // If not found, look at the logs directly
+        if (!transferEvent) {
+            console.log("Events not found by name, checking logs...");
+            // The Transfer event should be emitted from the contract
+            const transferInterface = new ethers.Interface([
+                "event Transfer(address indexed operator, address indexed from, address indexed to, uint256 amount, bool force, bytes data)"
+            ]);
+            
+            // Look through logs
+            for (const log of receipt.logs) {
+                try {
+                    const parsedLog = transferInterface.parseLog(log);
+                    if (parsedLog && parsedLog.name === "Transfer") {
+                        transferEvent = {
+                            ...log,
+                            event: "Transfer",
+                            args: parsedLog.args
+                        };
+                        break;
+                    }
+                } catch (e) {
+                    // Not this event
+                }
+            }
+        }
+        
+        expect(transferEvent).to.not.be.undefined;
+        
+        // Continue with the rest of the assertions
+        expect(transferEvent.args.operator).to.equal(mustaaAddress);
+        expect(transferEvent.args.from).to.equal(mustaaAddress);
+        expect(transferEvent.args.to).to.equal(owner1Address);
+        expect(transferEvent.args.amount).to.equal(transferAmount * decimalsFactor);
+        expect(transferEvent.args.force).to.be.true;
+        
+        // The year should be decodable from the data
+        const decodedYear = ethers.AbiCoder.defaultAbiCoder().decode(['uint256'], transferEvent.args.data)[0];
+        expect(decodedYear).to.equal(year);
     });
     
     it("Should revert when transferring more tokens than available for a specific year", async function () {
-      const year = 2024;
-      const tooManyTokens = BigInt(300); // More than Mustaa's allocation
-      const decimalsFactor = BigInt(10);
-      
-      await expect(
-        timeToken.connect(mustaa).transferForYear(
-          mustaaAddress,
-          owner1Address,
-          tooManyTokens * decimalsFactor,
-          year, 
-          true,
-          "0x"
-        )
-      ).to.be.revertedWithCustomError(timeToken, "YearlyBalanceInsufficient");
+        const year = 2024;
+        const tooManyTokens = BigInt(300); // More than Mustaa's allocation
+        const decimalsFactor = BigInt(10);
+        
+        const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
+        
+        await expect(
+            timeToken.connect(mustaa).transfer(
+                mustaaAddress,
+                owner1Address,
+                tooManyTokens * decimalsFactor,
+                true,
+                data
+            )
+        ).to.be.revertedWithCustomError(timeToken, "LSP7AmountExceedsBalance");
+    });
+  });
+
+  describe("Batch transfer functionality", function() {
+    it("Should support batch transfers for different years", async function () {
+        const years = [2024, 2025];
+        const amounts = [BigInt(2), BigInt(3)];
+        const decimalsFactor = BigInt(10);
+        
+        const mustaa2024Initial = await timeToken.balanceOfYear(mustaaAddress, years[0]);
+        const mustaa2025Initial = await timeToken.balanceOfYear(mustaaAddress, years[1]);
+        const owner12024Initial = await timeToken.balanceOfYear(owner1Address, years[0]);
+        const owner12025Initial = await timeToken.balanceOfYear(owner1Address, years[1]);
+        
+        // Encode years in data parameters
+        const data = years.map(year => 
+            ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year])
+        );
+        
+        // Perform batch transfer
+        await timeToken.connect(mustaa).transferBatch(
+            [mustaaAddress, mustaaAddress],
+            [owner1Address, owner1Address],
+            [amounts[0] * decimalsFactor, amounts[1] * decimalsFactor],
+            [true, true],
+            data
+        );
+        
+        // Verify balances for both years
+        expect(await timeToken.balanceOfYear(mustaaAddress, years[0]))
+            .to.equal(mustaa2024Initial - (amounts[0] * decimalsFactor));
+        expect(await timeToken.balanceOfYear(mustaaAddress, years[1]))
+            .to.equal(mustaa2025Initial - (amounts[1] * decimalsFactor));
+        expect(await timeToken.balanceOfYear(owner1Address, years[0]))
+            .to.equal(owner12024Initial + (amounts[0] * decimalsFactor));
+        expect(await timeToken.balanceOfYear(owner1Address, years[1]))
+            .to.equal(owner12025Initial + (amounts[1] * decimalsFactor));
     });
     
-    it("Should revert when transferring to a non-allowed recipient", async function () {
-      const year = 2024;
-      const transferAmount = BigInt(5);
-      const decimalsFactor = BigInt(10);
-      
-      await expect(
-        timeToken.connect(mustaa).transferForYear(
-          mustaaAddress,
-          nonAllowedUser.address,
-          transferAmount * decimalsFactor,
-          year,
-          true,
-          "0x"
-        )
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership")
-        .withArgs(nonAllowedUser.address);
+    it("Should revert if batch transfer arrays have different lengths", async function() {
+        const data = [2024, 2025].map(year => 
+            ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year])
+        );
+        
+        await expect(
+            timeToken.connect(mustaa).transferBatch(
+                [mustaaAddress, mustaaAddress],
+                [owner1Address], // Only one address
+                [BigInt(10), BigInt(20)],
+                [true, true],
+                data
+            )
+        ).to.be.revertedWithCustomError(timeToken, "LSP7InvalidTransferBatch");
     });
     
-    it("Should allow operators to transfer on behalf of token owners", async function () {
-      const year = 2024;
-      const transferAmount = BigInt(5);
-      const decimalsFactor = BigInt(10);
-      const operatorAllowance = BigInt(10) * decimalsFactor;
+    it("Should revert if any transfer in batch fails", async function() {
+      // Try a batch where second transfer will fail (too many tokens)
+      const years = [2024, 2025];
+      const data = years.map(year => 
+        ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year])
+      );
       
-      // Mustaa authorizes owner as operator
+      await expect(
+        timeToken.connect(mustaa).transferBatch(
+          [mustaaAddress, mustaaAddress],
+          [owner1Address, owner1Address],
+          [BigInt(10), ethers.parseEther("1000")], // Second transfer amount too large
+          [true, true],
+          data
+        )
+      ).to.be.reverted; // Will revert with LSP7AmountExceedsBalance
+    });
+  });
+
+  describe("Operator authorization", function() {
+    it("Should authorize an operator with a generic allowance", async function() {
+      const amount = BigInt(50) * BigInt(10);
+      
+      // Authorize owner as operator for Mustaa's tokens
       await timeToken.connect(mustaa).authorizeOperator(
-        ownerAddress,
-        operatorAllowance,
+        ownerAddress, 
+        amount,
         "0x"
       );
       
-      // Owner transfers on behalf of Mustaa
-      await timeToken.connect(owner).transferForYear(
+      // Check authorization amount
+      expect(await timeToken.authorizedAmountFor(ownerAddress, mustaaAddress))
+        .to.equal(amount);
+    });
+    
+    it("Should allow operator to transfer tokens on behalf of owner", async function() {
+      const year = 2024;
+      const amount = BigInt(10) * BigInt(10);
+      const transferAmount = BigInt(5) * BigInt(10);
+      
+      // Initial balances
+      const mustaaInitialBalance = await timeToken.balanceOfYear(mustaaAddress, year);
+      const owner1InitialBalance = await timeToken.balanceOfYear(owner1Address, year);
+      
+      // Authorize owner as operator with generic allowance
+      await timeToken.connect(mustaa).authorizeOperator(
+        ownerAddress, 
+        amount,
+        "0x"
+      );
+      
+      // Owner transfers on behalf of Mustaa (encode year in data)
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
+      await timeToken.connect(owner).transfer(
         mustaaAddress,
         owner1Address,
-        transferAmount * decimalsFactor,
-        year,
+        transferAmount,
         true,
-        "0x"
+        data
       );
       
       // Verify balances
-      const mustaaBalance = await timeToken.yearlyBalances(year, mustaaAddress);
-      const owner1Balance = await timeToken.yearlyBalances(year, owner1Address);
-      const expectedMustaaBalance = BigInt(282) * decimalsFactor - (transferAmount * decimalsFactor);
+      expect(await timeToken.balanceOfYear(mustaaAddress, year))
+        .to.equal(mustaaInitialBalance - transferAmount);
+      expect(await timeToken.balanceOfYear(owner1Address, year))
+        .to.equal(owner1InitialBalance + transferAmount);
       
-      expect(mustaaBalance).to.equal(expectedMustaaBalance);
+      // Verify remaining allowance
+      expect(await timeToken.authorizedAmountFor(ownerAddress, mustaaAddress))
+        .to.equal(amount - transferAmount);
     });
     
-    it("Should support batch transfers for different years", async function () {
-      const years = [2024, 2025];
-      const amounts = [BigInt(2), BigInt(3)];
-      const decimalsFactor = BigInt(10);
+    it("Should emit OperatorAuthorizationChanged event", async function() {
+      const amount = BigInt(20) * BigInt(10);
       
-      const mustaa2024Initial = await timeToken.yearlyBalances(years[0], mustaaAddress);
-      const mustaa2025Initial = await timeToken.yearlyBalances(years[1], mustaaAddress);
-      const owner12024Initial = await timeToken.yearlyBalances(years[0], owner1Address);
-      const owner12025Initial = await timeToken.yearlyBalances(years[1], owner1Address);
-      
-      // Perform batch transfer
-      await timeToken.connect(mustaa).transferBatchForYears(
-        [mustaaAddress, mustaaAddress],
-        [owner1Address, owner1Address],
-        [amounts[0] * decimalsFactor, amounts[1] * decimalsFactor],
-        years,
-        [true, true],
-        ["0x", "0x"]
+      const tx = await timeToken.connect(mustaa).authorizeOperator(
+        ownerAddress, 
+        amount,
+        "0x"
       );
       
-      // Verify balances for both years
-      expect(await timeToken.yearlyBalances(years[0], mustaaAddress))
-        .to.equal(mustaa2024Initial - (amounts[0] * decimalsFactor));
-      expect(await timeToken.yearlyBalances(years[1], mustaaAddress))
-        .to.equal(mustaa2025Initial - (amounts[1] * decimalsFactor));
-      expect(await timeToken.yearlyBalances(years[0], owner1Address))
-        .to.equal(owner12024Initial + (amounts[0] * decimalsFactor));
-      expect(await timeToken.yearlyBalances(years[1], owner1Address))
-        .to.equal(owner12025Initial + (amounts[1] * decimalsFactor));
+      const receipt = await tx.wait();
+      
+      // Debug: log all events to see what's available
+      console.log("Available events:", receipt.events?.map(e => e.event || e.eventName));
+      
+      // Try different approaches to find the event
+      let event = receipt.events?.find(e => e.event === "OperatorAuthorizationChanged" || e.eventName === "OperatorAuthorizationChanged");
+      
+      // If still not found, parse logs directly
+      if (!event) {
+        console.log("Events not found by name, checking logs directly...");
+        // Define the event interface
+        const eventInterface = new ethers.Interface([
+          "event OperatorAuthorizationChanged(address indexed operator, address indexed tokenOwner, uint256 indexed amount, bytes operatorNotificationData)"
+        ]);
+        
+        // Look through all logs
+        for (const log of receipt.logs) {
+          try {
+            const parsedLog = eventInterface.parseLog(log);
+            if (parsedLog && parsedLog.name === "OperatorAuthorizationChanged") {
+              event = {
+                ...log,
+                event: "OperatorAuthorizationChanged",
+                args: parsedLog.args
+              };
+              break;
+            }
+          } catch (e) {
+            // Not this event, continue to next log
+          }
+        }
+      }
+      
+      // If event is still not found, log all raw logs
+      if (!event) {
+        console.log("Raw logs:", receipt.logs);
+      }
+      
+      expect(event).to.not.be.undefined;
+      expect(event?.args?.operator).to.equal(ownerAddress);
+      expect(event?.args?.tokenOwner).to.equal(mustaaAddress);
+      expect(event?.args?.amount).to.equal(amount);
     });
-    
-    it("Should maintain year-specific balances separately", async function () {
-      // Transfer tokens for different years
-      const years = [2024, 2025];
-      const amounts = [BigInt(5), BigInt(7)];
-      const decimalsFactor = BigInt(10);
+  });
+  
+  describe("Revoke, increase and decrease allowance", function() {
+    it("Should revoke operator authorization", async function() {
+      const amount = BigInt(20) * BigInt(10);
       
-      // Initial balances
-      const mustaaInitial2024 = await timeToken.yearlyBalances(years[0], mustaaAddress);
-      const mustaaInitial2025 = await timeToken.yearlyBalances(years[1], mustaaAddress);
+      // First authorize
+      await timeToken.connect(mustaa).authorizeOperator(
+        ownerAddress, 
+        amount,
+        "0x"
+      );
       
-      // Transfer for year 2024
-      await timeToken.connect(mustaa).transferForYear(
+      // Verify authorization
+      expect(await timeToken.authorizedAmountFor(ownerAddress, mustaaAddress))
+        .to.equal(amount);
+      
+      // Revoke authorization
+      await timeToken.connect(mustaa).revokeOperator(
+        ownerAddress,
         mustaaAddress,
-        owner1Address,
-        amounts[0] * decimalsFactor,
-        years[0],
         true,
         "0x"
       );
       
-      // Verify only 2024 balance changed, 2025 unchanged
-      expect(await timeToken.yearlyBalances(years[0], mustaaAddress))
-        .to.equal(mustaaInitial2024 - (amounts[0] * decimalsFactor));
-      expect(await timeToken.yearlyBalances(years[1], mustaaAddress))
-        .to.equal(mustaaInitial2025);
+      // Verify authorization is revoked
+      expect(await timeToken.authorizedAmountFor(ownerAddress, mustaaAddress))
+        .to.equal(0);
+    });
+    
+    it("Should increase allowance", async function() {
+      const initialAmount = BigInt(20) * BigInt(10);
+      const increaseAmount = BigInt(10) * BigInt(10);
       
-      // Transfer for year 2025
-      await timeToken.connect(mustaa).transferForYear(
-        mustaaAddress,
-        owner1Address,
-        amounts[1] * decimalsFactor,
-        years[1],
-        true,
+      // First authorize
+      await timeToken.connect(mustaa).authorizeOperator(
+        ownerAddress, 
+        initialAmount,
         "0x"
       );
       
-      // Verify both balances are now updated correctly
-      expect(await timeToken.yearlyBalances(years[0], mustaaAddress))
-        .to.equal(mustaaInitial2024 - (amounts[0] * decimalsFactor));
-      expect(await timeToken.yearlyBalances(years[1], mustaaAddress))
-        .to.equal(mustaaInitial2025 - (amounts[1] * decimalsFactor));
+      // Increase allowance
+      await timeToken.connect(mustaa).increaseAllowance(
+        ownerAddress,
+        increaseAmount,
+        "0x"
+      );
+      
+      // Verify increased allowance
+      expect(await timeToken.authorizedAmountFor(ownerAddress, mustaaAddress))
+        .to.equal(initialAmount + increaseAmount);
     });
     
-    it("Should revert when cancelling a booking to a non-allowed recipient", async function () {
-      const daysToBook = 3;
-      const year = 2024;
+    it("Should decrease allowance", async function() {
+      const initialAmount = BigInt(30) * BigInt(10);
+      const decreaseAmount = BigInt(10) * BigInt(10);
       
-      // Book days
-      await timeToken.connect(mustaa).book(daysToBook, year);
+      // First authorize
+      await timeToken.connect(mustaa).authorizeOperator(
+        ownerAddress, 
+        initialAmount,
+        "0x"
+      );
       
-      // Try to cancel and send to non-allowed user
+      // Decrease allowance
+      await timeToken.connect(mustaa).decreaseAllowance(
+        ownerAddress,
+        mustaaAddress,
+        decreaseAmount,
+        "0x"
+      );
+      
+      // Verify decreased allowance
+      expect(await timeToken.authorizedAmountFor(ownerAddress, mustaaAddress))
+        .to.equal(initialAmount - decreaseAmount);
+    });
+    
+    it("Should revert when trying to decrease allowance below zero", async function() {
+      const initialAmount = BigInt(20) * BigInt(10);
+      const decreaseAmount = BigInt(30) * BigInt(10); // More than initial amount
+      
+      // First authorize
+      await timeToken.connect(mustaa).authorizeOperator(
+        ownerAddress, 
+        initialAmount,
+        "0x"
+      );
+      
+      // Try to decrease too much
       await expect(
-        timeToken.connect(mustaa).cancelBooking(daysToBook, year, nonAllowedUser.address)
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership")
-        .withArgs(nonAllowedUser.address);
+        timeToken.connect(mustaa).decreaseAllowance(
+          ownerAddress,
+          mustaaAddress,
+          decreaseAmount,
+          "0x"
+        )
+      ).to.be.revertedWithCustomError(timeToken, "LSP7DecreasedAllowanceBelowZero");
+    });
+    
+    it("Should revert when unauthorized caller tries to decrease allowance", async function() {
+      const initialAmount = BigInt(20) * BigInt(10);
+      const decreaseAmount = BigInt(10) * BigInt(10);
+      
+      // First authorize
+      await timeToken.connect(mustaa).authorizeOperator(
+        ownerAddress, 
+        initialAmount,
+        "0x"
+      );
+      
+      // Try to decrease allowance from unauthorized account
+      await expect(
+        timeToken.connect(owner1).decreaseAllowance(
+          ownerAddress,
+          mustaaAddress,
+          decreaseAmount,
+          "0x"
+        )
+      ).to.be.revertedWithCustomError(timeToken, "LSP7DecreaseAllowanceNotAuthorized");
+    });
+  });
+
+  describe("Supply and balance verification", function() {
+    it("Should track yearlySupply accurately", async function() {
+      const year = 2024;
+      const transferAmount = BigInt(10) * BigInt(10);
+      
+      const initialSupply = await timeToken.yearlySupply(year);
+      
+      // Transfer should not change yearly supply
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
+      await timeToken.connect(mustaa).transfer(
+        mustaaAddress,
+        owner1Address,
+        transferAmount,
+        true,
+        data
+      );
+      
+      expect(await timeToken.yearlySupply(year)).to.equal(initialSupply);
     });
   });
 
@@ -495,176 +672,136 @@ describe("TimeToken", function () {
       nonAllowedUser = (await ethers.getSigners())[5];
     });
     
-    it("Should prevent transferring to addresses not allowed in YachtOwnership", async function () {
+    it("Should prevent transferring to addresses not allowed in allowList", async function () {
+      const year = 2024;
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
       // Try to transfer to a non-allowed address
       await expect(
-        timeToken.connect(mustaa).transferForYear(
+        timeToken.connect(mustaa).transfer(
           mustaaAddress,
           nonAllowedUser.address,
           100,
-          2024,
           true,
-          "0x"
+          data
         )
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership");
+      ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed")
+        .withArgs(nonAllowedUser.address);
     });
     
-    it("Should allow transfers after recipient is allowed in YachtOwnership", async function () {
+    it("Should allow transfers after recipient is allowed in allowList", async function () {
+      const year = 2024;
       const transferAmount = BigInt(5) * BigInt(10);
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
       
       // Initially expect transfer to fail
       await expect(
-        timeToken.connect(mustaa).transferForYear(
+        timeToken.connect(mustaa).transfer(
           mustaaAddress,
           nonAllowedUser.address,
           transferAmount,
-          2024,
           true,
-          "0x"
+          data
         )
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership");
+      ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed")
+        .withArgs(nonAllowedUser.address);
       
-      // Now allow the user in YachtOwnership
-      await yachtToken.allowUser(nonAllowedUser.address);
+      // Now allow the user in the centralized allowList
+      await allowList.allowUser(nonAllowedUser.address);
       
       // Transfer should now succeed
-      await timeToken.connect(mustaa).transferForYear(
+      await timeToken.connect(mustaa).transfer(
         mustaaAddress,
         nonAllowedUser.address,
         transferAmount,
-        2024,
         true,
-        "0x"
+        data
       );
       
-      expect(await timeToken.yearlyBalances(2024, nonAllowedUser.address)).to.equal(transferAmount);
+      expect(await timeToken.balanceOfYear(nonAllowedUser.address, year)).to.equal(transferAmount);
     });
     
-    it("Should prevent transfers if user is disallowed in YachtOwnership", async function () {
+    it("Should prevent transfers if user is disallowed in allowList", async function () {
+      const year = 2024;
+      const transferAmount = BigInt(5) * BigInt(10);
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
+      
       // First allow the user
-      await yachtToken.allowUser(nonAllowedUser.address);
+      await allowList.allowUser(nonAllowedUser.address);
       
       // Transfer some tokens
-      const transferAmount = BigInt(5) * BigInt(10);
-      await timeToken.connect(mustaa).transferForYear(
+      await timeToken.connect(mustaa).transfer(
         mustaaAddress,
         nonAllowedUser.address,
         transferAmount,
-        2024,
         true,
-        "0x"
+        data
       );
       
       // Now disallow the user
-      await yachtToken.disallowUser(nonAllowedUser.address);
+      await allowList.disallowUser(nonAllowedUser.address);
       
       // User should have tokens but not be able to transfer them
-      expect(await timeToken.yearlyBalances(2024, nonAllowedUser.address)).to.equal(transferAmount);
+      expect(await timeToken.balanceOfYear(nonAllowedUser.address, year)).to.equal(transferAmount);
       
       // Try to transfer to an allowed address - should fail
       await expect(
-        timeToken.connect(nonAllowedUser).transferForYear(
+        timeToken.connect(nonAllowedUser).transfer(
           nonAllowedUser.address,
           owner1Address,
           transferAmount,
-          2024,
           true,
-          "0x"
+          data
         )
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership");
+      ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed")
+        .withArgs(nonAllowedUser.address);
     });
   });
 
   describe("Dynamic Allowlist Behavior", function () {
-    it("Should reflect allowlist changes from YachtOwnership in real-time", async function () {
+    it("Should reflect allowlist changes in real-time", async function () {
+      const year = 2024;
       const newUser = (await ethers.getSigners())[6];
       const transferAmount = BigInt(5) * BigInt(10);
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
       
       // Initially user is not allowed
-      expect(await yachtToken.allowed(newUser.address)).to.equal(false);
+      expect(await timeToken.allowed(newUser.address)).to.equal(false);
       
       // Allow the user
-      await yachtToken.allowUser(newUser.address);
+      await allowList.allowUser(newUser.address);
       
       // User should now be able to receive tokens
-      await timeToken.connect(mustaa).transferForYear(
+      await timeToken.connect(mustaa).transfer(
         mustaaAddress,
         newUser.address,
         transferAmount,
-        2024,
         true,
-        "0x"
+        data
       );
       
       // Disallow the user
-      await yachtToken.disallowUser(newUser.address);
+      await allowList.disallowUser(newUser.address);
       
       // User should no longer be able to transfer tokens
       await expect(
-        timeToken.connect(newUser).transferForYear(
+        timeToken.connect(newUser).transfer(
           newUser.address,
           owner1Address,
           transferAmount,
-          2024,
           true,
-          "0x"
+          data
         )
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership");
-    });
-  });
-
-  describe("Booking Permissions", function () {
-    it("Should allow only allowed users to book days", async function () {
-      const nonAllowedUser = (await ethers.getSigners())[5];
-      const allowedUser = owner1;
-      const transferAmount = BigInt(5) * BigInt(10);
-      
-      // Allow user and transfer tokens
-      await yachtToken.allowUser(nonAllowedUser.address);
-      await timeToken.connect(mustaa).transferForYear(
-        mustaaAddress,
-        nonAllowedUser.address,
-        transferAmount,
-        2024,
-        true,
-        "0x"
-      );
-      
-      // Disallow the user
-      await yachtToken.disallowUser(nonAllowedUser.address);
-      
-      // User should have tokens but not be allowed to book
-      expect(await timeToken.yearlyBalances(2024, nonAllowedUser.address)).to.equal(transferAmount);
-      
-      // Try to book - should fail due to allowed check in _update
-      await expect(
-        timeToken.connect(nonAllowedUser).book(1, 2024)
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership");
-    });
-    
-    it("Should prevent canceling bookings to non-allowed recipients", async function () {
-      // Book as allowed user
-      await timeToken.connect(mustaa).book(2, 2024);
-      
-      // Try to cancel and redirect to non-allowed user
-      const nonAllowedUser = (await ethers.getSigners())[5];
-      await expect(
-        timeToken.connect(mustaa).cancelBooking(2, 2024, nonAllowedUser.address)
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership");
-      
-      // Now allow the user
-      await yachtToken.allowUser(nonAllowedUser.address);
-      
-      // Should now succeed
-      await timeToken.connect(mustaa).cancelBooking(2, 2024, nonAllowedUser.address);
-      
-      // Check balance
-      expect(await timeToken.yearlyBalances(2024, nonAllowedUser.address)).to.equal(BigInt(2) * BigInt(10));
+      ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed")
+        .withArgs(newUser.address);
     });
   });
 
   describe("YachtOwnership Upgrades", function () {
     it("Should respect new allowlist rules after YachtOwnership is upgraded", async function () {
+      const year = 2024;
+      const transferAmount = BigInt(10);
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
+      
       // Upgrade YachtOwnership
       const YachtOwnershipV2 = await ethers.getContractFactory("YachtOwnershipV2");
       const upgradedYachtToken = await upgrades.upgradeProxy(
@@ -678,51 +815,45 @@ describe("TimeToken", function () {
       
       // But they're not allowed yet, so transfers should fail
       await expect(
-        timeToken.connect(mustaa).transferForYear(
+        timeToken.connect(mustaa).transfer(
           mustaaAddress,
           newUser.address,
-          BigInt(10),
-          2024,
+          transferAmount,
           true,
-          "0x"
+          data
         )
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership");
+      ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed")
+        .withArgs(newUser.address);
       
       // Now allow them
-      await upgradedYachtToken.allowUser(newUser.address);
+      await allowList.allowUser(newUser.address);
       
       // Transfer should now work
-      await timeToken.connect(mustaa).transferForYear(
+      await timeToken.connect(mustaa).transfer(
         mustaaAddress,
         newUser.address,
-        BigInt(10),
-        2024,
+        transferAmount,
         true,
-        "0x"
+        data
       );
       
-      expect(await timeToken.yearlyBalances(2024, newUser.address)).to.equal(BigInt(10));
+      expect(await timeToken.balanceOfYear(newUser.address, year)).to.equal(transferAmount);
     });
   });
 
   describe("Security Edge Cases", function () {
     it("Should not allow transfer to address(0)", async function () {
+      const year = 2024;
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
       await expect(
-        timeToken.connect(mustaa).transferForYear(
+        timeToken.connect(mustaa).transfer(
           mustaaAddress,
           ethers.ZeroAddress,
           BigInt(10),
-          2024,
           true,
-          "0x"
+          data
         )
-      ).to.be.revertedWithCustomError(timeToken, "RecipientNotAllowedInYachtOwnership");
-    });
-    
-    it("Should not allow booking with zero days", async function () {
-      await expect(
-        timeToken.connect(mustaa).book(0, 2024)
-      ).to.be.reverted; // Specific error depends on implementation
+      ).to.be.revertedWithCustomError(timeToken, "LSP7CannotSendWithAddressZero");
     });
     
     it("Should verify YachtOwnership contract at initialization", async function () {
@@ -738,6 +869,7 @@ describe("TimeToken", function () {
             mustaaAddress,
             [owner1Address, owner2Address],
             ethers.ZeroAddress, // Invalid yacht ownership address
+            await allowList.getAddress(),
             STARTING_YEAR,
             5
           ],
@@ -753,7 +885,7 @@ describe("TimeToken", function () {
         const pastYear = 2024; // Using 2024 since we know tokens were minted for this year
         
         // Get initial balance for past year
-        const initialBalance = await timeToken.yearlyBalances(pastYear, mustaaAddress);
+        const initialBalance = await timeToken.balanceOfYear(mustaaAddress, pastYear);
         expect(initialBalance).to.be.gt(0); // Verify we have tokens to burn
         
         // Get initial supply
@@ -763,7 +895,7 @@ describe("TimeToken", function () {
         await timeToken.burnExpiredTokens(mustaaAddress, pastYear);
         
         // Check balances are updated
-        expect(await timeToken.yearlyBalances(pastYear, mustaaAddress)).to.equal(0);
+        expect(await timeToken.balanceOfYear(mustaaAddress, pastYear)).to.equal(0);
         expect(await timeToken.yearlySupply(pastYear)).to.equal(
             initialSupply - initialBalance // Using BigInt subtraction
         );
@@ -782,8 +914,8 @@ describe("TimeToken", function () {
         const pastYear = 2024; // Using 2024 since we know tokens were minted for this year
         
         // Get initial balances
-        const initialBalanceMustaa = await timeToken.yearlyBalances(pastYear, mustaaAddress);
-        const initialBalanceOwner1 = await timeToken.yearlyBalances(pastYear, owner1Address);
+        const initialBalanceMustaa = await timeToken.balanceOfYear(mustaaAddress, pastYear);
+        const initialBalanceOwner1 = await timeToken.balanceOfYear(owner1Address, pastYear);
         
         expect(initialBalanceMustaa).to.be.gt(0); // Verify we have tokens to burn
         expect(initialBalanceOwner1).to.be.gt(0); // Verify we have tokens to burn
@@ -798,8 +930,8 @@ describe("TimeToken", function () {
         );
         
         // Check all balances are updated
-        expect(await timeToken.yearlyBalances(pastYear, mustaaAddress)).to.equal(0);
-        expect(await timeToken.yearlyBalances(pastYear, owner1Address)).to.equal(0);
+        expect(await timeToken.balanceOfYear(mustaaAddress, pastYear)).to.equal(0);
+        expect(await timeToken.balanceOfYear(owner1Address, pastYear)).to.equal(0);
         
         // Check yearly supply is updated
         expect(await timeToken.yearlySupply(pastYear)).to.equal(

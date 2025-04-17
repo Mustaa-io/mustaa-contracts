@@ -4,6 +4,7 @@ pragma solidity ^0.8.4;
 
 // modules
 import {LSP7DigitalAssetInitAbstract} from "./LSP7DigitalAssetInitAbstract.sol";
+import {AllowList} from "./AllowList.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -31,25 +32,11 @@ contract YachtOwnership is
     UUPSUpgradeable,
     LSP7DigitalAssetInitAbstract
 {
-    /**
-     * @dev Allowed status of addresses. True if allowed, False otherwise.
-     */
-    mapping(address => bool) private _allowed;
 
     /**
      * @dev Is owner mapping. True if address has non-zero balance.
      */
     mapping(address => bool) private _isOwner;
-
-    /**
-     * @dev Emitted when a `user` is allowed to transfer and approve.
-     */
-    event UserAllowed(address indexed user);
-
-    /**
-     * @dev Emitted when a user is disallowed.
-     */
-    event UserDisallowed(address indexed user);
 
     /**
      * @dev Emitted when a user acquires ownership tokens (balance > 0).
@@ -62,11 +49,6 @@ contract YachtOwnership is
     event OwnershipLost(address indexed previousOwner);
 
     /**
-     * @dev The operation failed because the user is not allowed.
-     */
-    error LSP7Disallowed(address user);
-
-    /**
      * @notice The `tokenSupplyCap` must be set and cannot be `0`.
      * @dev Reverts when setting `0` for the {tokenSupplyCap}. The max token supply MUST be set to a number greater than 0.
      */
@@ -77,10 +59,20 @@ contract YachtOwnership is
      * @dev Reverts when trying to mint tokens but the {totalSupply} has reached the maximum {tokenSupplyCap}.
      */
     error LSP7CappedSupplyCannotMintOverCap();
+ 
+    /**
+     * @dev The operation failed because the user is not allowed.
+     */
+    error LSP7Disallowed(address user);
 
     // --- Storage
     uint256 private _tokenSupplyCap;
     uint256 private _ownerCount;
+
+    /**
+     * @dev Reference to the AllowList contract for permission checks
+     */
+    AllowList public allowList;
     
     // Add a gap to prevent storage clashes in future upgrades
     uint256[50] private __gap;
@@ -92,6 +84,7 @@ contract YachtOwnership is
      * @param name_ The name of the token.
      * @param symbol_ The symbol of the token.
      * @param newOwner_ The owner of the token contract.
+     * @param allowListAddress_ The address of the allowlist contract.
      * 
      * @notice Deploying a `LSP7CappedSupply` token contract with max token supply cap set to `tokenSupplyCap_`.
      * @dev Deploy a `LSP7CappedSupply` token contract and set the maximum token supply token cap up to which
@@ -106,7 +99,8 @@ contract YachtOwnership is
         string memory name_,
         string memory symbol_,
         address newOwner_,
-        uint256 tokenSupplyCap_
+        uint256 tokenSupplyCap_,
+        address allowListAddress_
     ) public virtual initializer {
         // Initialize parent contracts
         __Ownable_init();
@@ -125,7 +119,7 @@ contract YachtOwnership is
         }
 
         _tokenSupplyCap = tokenSupplyCap_;
-        _allowUser(newOwner_);
+        allowList = AllowList(allowListAddress_);
     }
 
     /**
@@ -197,37 +191,6 @@ contract YachtOwnership is
     }
 
     /**
-     * @dev Returns the allowed status of an account.
-     */
-    function allowed(address account) public view virtual returns (bool) {
-        return _allowed[account];
-    }
-
-    /**
-     * @dev Allows a user to receive and transfer tokens, including minting and burning.
-     */
-    function _allowUser(address user) internal virtual returns (bool) {
-        bool isAllowed = allowed(user);
-        if (!isAllowed) {
-            _allowed[user] = true;
-            emit UserAllowed(user);
-        }
-        return isAllowed;
-    }
-
-    /**
-     * @dev Disallows a user from receiving and transferring tokens, including minting and burning.
-     */
-    function _disallowUser(address user) internal virtual returns (bool) {
-        bool isAllowed = allowed(user);
-        if (isAllowed) {
-            _allowed[user] = false;
-            emit UserDisallowed(user);
-        }
-        return isAllowed;
-    }
-
-    /**
      * @dev See {LSP7-_update}.
      */
     function _update(address from, address to, uint256 amount, bool force, bytes memory data) internal virtual override {
@@ -296,17 +259,7 @@ contract YachtOwnership is
         _mint(to, amount, force, data);
     }
 
-    /**
-     * @dev Public function to allow a user.
-     */
-    function allowUser(address user) public virtual onlyOwner {
-        _allowUser(user);
-    }
-
-    /**
-     * @dev Public function to disallow a user.
-     */
-    function disallowUser(address user) public virtual onlyOwner {
-        _disallowUser(user);
+    function allowed(address account) public view virtual returns (bool) {
+        return allowList.isAllowed(account);
     }
 }

@@ -4,6 +4,7 @@ import { Contract } from "ethers";
 
 describe("YachtOwnership", function () {
   let yachtToken;
+  let allowList;
   let owner;
   let user1;
   let user2;
@@ -22,6 +23,14 @@ describe("YachtOwnership", function () {
     user1Address = await user1.getAddress();
     user2Address = await user2.getAddress();
 
+    // First deploy the AllowList
+    const AllowList = await ethers.getContractFactory("AllowList");
+    allowList = await upgrades.deployProxy(
+      AllowList,
+      [ownerAddress],
+      { initializer: 'initialize' }
+    );
+
     // Deploy the token contract using proxy pattern
     const YachtOwnership = await ethers.getContractFactory("YachtOwnership");
     
@@ -32,14 +41,16 @@ describe("YachtOwnership", function () {
         TOKEN_NAME,
         TOKEN_SYMBOL,
         ownerAddress,
-        MAX_SUPPLY
+        MAX_SUPPLY,
+        await allowList.getAddress()
       ],
       { initializer: 'initialize' }
     );
 
-    // Allow users for the tests (owner is allowed by default)
-    await yachtToken.allowUser(user1Address);
-    await yachtToken.allowUser(user2Address);
+    // Allow users for the tests (owner should be already allowed)
+    await allowList.allowUser(ownerAddress);
+    await allowList.allowUser(user1Address);
+    await allowList.allowUser(user2Address);
     
     // We don't mint tokens here to avoid supply issues
     // Tests that need tokens will mint them individually
@@ -73,18 +84,18 @@ describe("YachtOwnership", function () {
       expect(await yachtToken.allowed(randomUser)).to.equal(false);
     });
 
-    it("Owner can allow users", async function () {
+    it("Owner can allow users through allowList", async function () {
       const randomUser = ethers.Wallet.createRandom().address;
       expect(await yachtToken.allowed(randomUser)).to.equal(false);
       
-      await yachtToken.allowUser(randomUser);
+      await allowList.allowUser(randomUser);
       expect(await yachtToken.allowed(randomUser)).to.equal(true);
     });
 
     it("Should emit UserAllowed event when allowing a user", async function () {
       const randomUser = ethers.Wallet.createRandom().address;
-      await expect(yachtToken.allowUser(randomUser))
-        .to.emit(yachtToken, "UserAllowed")
+      await expect(allowList.allowUser(randomUser))
+        .to.emit(allowList, "UserAllowed")
         .withArgs(randomUser);
     });
   });
@@ -179,7 +190,7 @@ describe("YachtOwnership", function () {
 
   it("Only owner can disallow users", async function () {
     await expect(
-      yachtToken.connect(user1).disallowUser(user2Address)
+      allowList.connect(user1).disallowUser(user2Address)
     ).to.be.revertedWith("Ownable: caller is not the owner");
   });
 

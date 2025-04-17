@@ -18,9 +18,10 @@ contract YachtOwnershipV2 is YachtOwnership {
         string memory name_,
         string memory symbol_,
         address newOwner_,
-        uint256 tokenSupplyCap_
+        uint256 tokenSupplyCap_,
+        address allowListAddress_
     ) public override initializer {
-        YachtOwnership.initialize(name_, symbol_, newOwner_, tokenSupplyCap_);
+        YachtOwnership.initialize(name_, symbol_, newOwner_, tokenSupplyCap_, allowListAddress_);
     }
     
     /**

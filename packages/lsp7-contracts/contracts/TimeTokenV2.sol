@@ -24,6 +24,7 @@ contract TimeTokenV2 is TimeToken {
         address mustaa_,
         address[] memory owners_,
         address yachtOwnershipAddress_,
+        address allowListAddress_,
         uint256 startingYear_,
         uint256 yearCount_
     ) public override initializer {
@@ -35,6 +36,7 @@ contract TimeTokenV2 is TimeToken {
             mustaa_,
             owners_,
             yachtOwnershipAddress_,
+            allowListAddress_,
             startingYear_,
             yearCount_
         );
@@ -50,41 +52,6 @@ contract TimeTokenV2 is TimeToken {
         if (rate > 50) revert DiscountTooHigh(rate, 50);
         discountRates[user] = rate;
         emit DiscountSet(user, rate);
-    }
-    
-    /**
-     * @notice Books the yacht with discount applied if available
-     * @dev Overrides the original book function to apply discounts
-     * @param numDays The number of days to book
-     * @param year The year for which to book
-     */
-    function book(uint256 numDays, uint256 year) public override nonReentrant {
-        // Check if sender is allowed
-        if (!yachtOwnership.allowed(msg.sender)) {
-            revert RecipientNotAllowedInYachtOwnership(msg.sender);
-        }
-        
-        // Check if days is valid
-        if (numDays == 0) {
-            revert InvalidDays();
-        }
-        
-        uint256 decimalsFactor = 10 ** decimals();
-        uint256 discountRate = discountRates[msg.sender];
-        uint256 tokenAmount = numDays * decimalsFactor;
-        
-        // Apply discount if exists
-        if (discountRate > 0) {
-            tokenAmount = (tokenAmount * (100 - discountRate)) / 100;
-        }
-        
-        if (yearlyBalances[year][msg.sender] < tokenAmount) 
-            revert InsufficientBalance(year, yearlyBalances[year][msg.sender], tokenAmount);
-        
-        yearlyBalances[year][msg.sender] -= tokenAmount;
-        _yearlySupply[year] -= tokenAmount;
-
-        emit YachtBooked(msg.sender, year, numDays, tokenAmount);
     }
 
     /**
