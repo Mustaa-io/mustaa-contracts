@@ -56,7 +56,7 @@ contract TimeToken is
     error AllowListNotSet();
     error TotalOwnershipPercentageInvalid();
     error YearlyBalanceInsufficient(uint256 year, uint256 available, uint256 required);
-    error RecipientNotAllowedInYachtOwnership(address recipient);
+    error LSP7NotAnOwner(address recipient);
     error InvalidDays();
     error TokensNotExpired(uint256 year, uint256 currentYear);
 
@@ -290,25 +290,50 @@ contract TimeToken is
     }
 
     /**
-     * @dev See {LSP7DigitalAssetInitAbstractTime-_update}.
-     * Adds allowlist checks while preserving yearly balance tracking
+     * @dev Helper function to verify if an address has the required permissions
+     * @param account The address to check permissions for
      */
-    function _update(
+    function _verifyPermissions(address account) internal view {
+        if (!allowList.isAllowed(account)) revert LSP7Disallowed(account);
+        if (!yachtOwnership.isOwner(account)) revert LSP7NotAnOwner(account);
+    }
+
+    /**
+     * @dev Hook that is called before any token transfer, including minting and burning.
+     * Validates addresses based on operation type:
+     * - Minting (from = address(0)): Check only recipient
+     * - Burning (to = address(0)): Check only sender
+     * - Regular Transfer: Check both addresses
+     *
+     * @param from The sender address
+     * @param to The recipient address
+     * @param amount The amount of token to transfer
+     * @param force A boolean that describe if transfer to a `to` address that does not support LSP1 is allowed or not.
+     * @param data The data sent alongside the transfer
+     */
+    function _beforeTokenTransfer(
         address from,
         address to,
         uint256 amount,
         bool force,
         bytes memory data
     ) internal virtual override {
-        if (from != address(0) && !allowed(from)) revert LSP7Disallowed(from);
-        if (to != address(0) && !allowed(to)) revert LSP7Disallowed(to);
-        
-        super._update(from, to, amount, force, data);
+        if (from == address(0)) {
+            // Minting: check only recipient
+            _verifyPermissions(to);
+        } else if (to == address(0)) {
+            // Burning: check only sender
+            _verifyPermissions(from);
+        } else {
+            // Regular transfer: check both addresses
+            _verifyPermissions(from);
+            _verifyPermissions(to);
+        }
     }
 
     /**
      * @dev See {LSP7DigitalAssetInitAbstractTime-_updateOperator}.
-     * Adds allowlist checks for operators
+     * Adds allowlist and yacht ownership checks for operators
      */
     function _updateOperator(
         address tokenOwner,
@@ -317,8 +342,8 @@ contract TimeToken is
         bool notified,
         bytes memory operatorNotificationData
     ) internal virtual override {
-        if (!allowed(tokenOwner)) revert LSP7Disallowed(tokenOwner);
-        if (!allowed(operator)) revert LSP7Disallowed(operator);
+        _verifyPermissions(tokenOwner);
+        _verifyPermissions(operator);
         
         super._updateOperator(tokenOwner, operator, allowance, notified, operatorNotificationData);
     }
