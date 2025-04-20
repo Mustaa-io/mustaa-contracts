@@ -32,7 +32,6 @@ import {
  * - Only allowed users can participate
  * - Tokens are tracked per year
  * - Proper distribution based on ownership
- * - Secure booking and cancellation mechanisms
  */
 contract TimeToken is
     Initializable,
@@ -161,7 +160,6 @@ contract TimeToken is
         uint256 startingYear_,
         uint256 yearCount_
     ) public virtual initializer {
-        // Initialize parent contracts
         __Ownable_init();
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
@@ -184,7 +182,6 @@ contract TimeToken is
 
         uint256 decimalsFactor = 10 ** decimals();
         
-        // Validate all ownerships and calculate total percentage
         uint256[] memory percentages = new uint256[](owners_.length);
         uint256 totalPercentage = 0;
         
@@ -199,24 +196,18 @@ contract TimeToken is
             totalPercentage += percentage;
         }
 
-        // Verify total percentage adds up to 100%
         if (totalPercentage != 10000) revert TotalOwnershipPercentageInvalid();
 
-        // Mint tokens for all specified years
         for (uint256 year = startingYear_; year < startingYear_ + yearCount_; year++) {
-            // Calculate Mustaa's share for the year
             uint256 mustaaPerYear = (isLeapYear(year) ? MUSTAA_LEAP_SHARE : MUSTAA_REGULAR_SHARE) * decimalsFactor;
             
-            // Verify yearly cap isn't exceeded
             uint256 ownerTotalAmount = OWNER_TOTAL_SHARE * decimalsFactor;
             if (mustaaPerYear + ownerTotalAmount > yearlySupplyCap(year) * decimalsFactor) {
                 revert YearlySupplyExceeded(year);
             }
             
-            // Mint Mustaa's tokens
             _mint(mustaa_, mustaaPerYear, true, abi.encode(year, "Annual allocation for Mustaa"));
 
-            // Mint owners' shares based on yacht ownership percentages
             for (uint256 i = 0; i < owners_.length; i++) {
                 address owner = owners_[i];
                 uint256 ownerShare = (ownerTotalAmount * percentages[i]) / 10000;
@@ -319,13 +310,10 @@ contract TimeToken is
         bytes memory data
     ) internal virtual override {
         if (from == address(0)) {
-            // Minting: check only recipient
             _verifyPermissions(to);
         } else if (to == address(0)) {
-            // Burning: check only sender
             _verifyPermissions(from);
         } else {
-            // Regular transfer: check both addresses
             _verifyPermissions(from);
             _verifyPermissions(to);
         }
