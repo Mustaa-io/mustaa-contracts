@@ -17,6 +17,7 @@ import {
 /**
  * @title TimeToken - A time-based token system for yacht usage rights
  * @dev Implementation of LSP7 that manages time-based tokens for yacht booking,
+ * @author Mustaa
  * with yearly allocations based on ownership percentages and specific rules:
  * 
  * Key features:
@@ -44,7 +45,6 @@ contract TimeToken is
     // --- Errors
 
     error InvalidOwnerCount();
-    error TokensAlreadyMinted(uint256 year, address owner);
     error InvalidDayRange();
     error InsufficientYearlyTokens(uint256 year);
     error YearlySupplyExceeded(uint256 year);
@@ -63,6 +63,11 @@ contract TimeToken is
      * @dev The operation failed because the user is not allowed.
      */
     error LSP7Disallowed(address user);
+
+    /**
+     * @dev The operation failed because the starting year is in the past.
+     */
+    error InvalidStartingYear(uint256 providedYear, uint256 currentYear);
 
     // --- Constants
 
@@ -103,6 +108,11 @@ contract TimeToken is
      */
     AllowList public allowList;
 
+    /**
+     * @dev Special address that receives fixed yearly allocation
+     */
+    address public mustaaAddress;
+
     // --- Events
 
     /**
@@ -128,6 +138,83 @@ contract TimeToken is
 
     // Add a gap to prevent storage clashes in future upgrades
     uint256[50] private __gap;
+
+    /**
+     * @dev Helper struct to hold ownership validation results
+     */
+    struct OwnershipData {
+        uint256[] percentages;
+        uint256 totalPercentage;
+        uint256 mustaaPercentage;
+    }
+
+    /**
+     * @dev Validates owners and calculates ownership percentages
+     * @param owners Array of owner addresses to validate
+     * @return OwnershipData containing validated percentages and totals
+     */
+    function _validateOwnership(
+        address[] memory owners
+    ) internal view returns (OwnershipData memory) {
+        if (owners.length == 0) revert InvalidOwnerCount();
+        
+        OwnershipData memory data;
+        data.percentages = new uint256[](owners.length);
+        
+        // Check if Mustaa is a yacht owner and account for its percentage
+        if (yachtOwnership.isOwner(mustaaAddress)) {
+            data.mustaaPercentage = yachtOwnership.getOwnershipPercentage(mustaaAddress);
+        }
+        
+        // Validate all owners and their percentages
+        for (uint256 i = 0; i < owners.length; i++) {
+            address owner = owners[i];
+            if (!yachtOwnership.isOwner(owner)) revert InvalidOwnership(owner, 0);
+            
+            uint256 percentage = yachtOwnership.getOwnershipPercentage(owner);
+            if (percentage == 0) revert InvalidOwnership(owner, percentage);
+            
+            data.percentages[i] = percentage;
+            data.totalPercentage += percentage;
+        }
+        
+        // Include Mustaa's percentage in the total validation
+        if (data.totalPercentage + data.mustaaPercentage != 10000) revert TotalOwnershipPercentageInvalid();
+        
+        return data;
+    }
+
+    /**
+     * @dev Mints tokens for a specific year to Mustaa and other owners
+     * @param year The year to mint tokens for
+     * @param owners Array of owner addresses
+     * @param ownershipData Validated ownership data
+     */
+    function _mintYearlyTokens(
+        uint256 year,
+        address[] memory owners,
+        OwnershipData memory ownershipData
+    ) internal {
+        uint256 decimalsFactor = 10 ** decimals();
+        uint256 mustaaPerYear = (isLeapYear(year) ? MUSTAA_LEAP_SHARE : MUSTAA_REGULAR_SHARE) * decimalsFactor;
+        uint256 ownerTotalAmount = OWNER_TOTAL_SHARE * decimalsFactor;
+        
+        // Check existing yearly supply and total supply cap
+        uint256 currentYearlySupply = _yearlySupply[year];
+        if (currentYearlySupply > 0 || (mustaaPerYear + ownerTotalAmount > yearlySupplyCap(year) * decimalsFactor)) {
+            revert YearlySupplyExceeded(year);
+        }
+        
+        // Mint Mustaa's special allocation
+        _mint(mustaaAddress, mustaaPerYear, true, abi.encode(year, "Annual allocation for Mustaa"));
+        
+        // Distribute tokens among other owners
+        uint256 nonMustaaTotal = ownershipData.totalPercentage;
+        for (uint256 i = 0; i < owners.length; i++) {
+            uint256 ownerShare = (ownerTotalAmount * ownershipData.percentages[i]) / nonMustaaTotal;
+            _mint(owners[i], ownerShare, true, abi.encode(year, "Annual allocation for owner"));
+        }
+    }
 
     /**
      * @notice Initializes the TimeToken contract with initial distributions
@@ -172,48 +259,24 @@ contract TimeToken is
             false // isNonDivisible
         );
 
-        if (owners_.length == 0) revert InvalidOwnerCount();
-
         if (yachtOwnershipAddress_ == address(0)) revert OwnershipContractNotSet();
         yachtOwnership = YachtOwnership(payable(yachtOwnershipAddress_));
 
         if (allowListAddress_ == address(0)) revert AllowListNotSet();
         allowList = AllowList(payable(allowListAddress_));
-
-        uint256 decimalsFactor = 10 ** decimals();
         
-        uint256[] memory percentages = new uint256[](owners_.length);
-        uint256 totalPercentage = 0;
-        
-        for (uint256 i = 0; i < owners_.length; i++) {
-            address owner = owners_[i];
-            if (!yachtOwnership.isOwner(owner)) revert InvalidOwnership(owner, 0);
-            
-            uint256 percentage = yachtOwnership.getOwnershipPercentage(owner);
-            if (percentage == 0) revert InvalidOwnership(owner, percentage);
-            
-            percentages[i] = percentage;
-            totalPercentage += percentage;
-        }
+        mustaaAddress = mustaa_;
 
-        if (totalPercentage != 10000) revert TotalOwnershipPercentageInvalid();
+        // Validate ownership and get percentages
+        OwnershipData memory ownershipData = _validateOwnership(owners_);
 
+        // Ensure startingYear_ is not in the past
+        uint256 currentYear = block.timestamp / 365 days + 1970;
+        if (startingYear_ < currentYear) revert InvalidStartingYear(startingYear_, currentYear);
+
+        // Mint tokens for each year
         for (uint256 year = startingYear_; year < startingYear_ + yearCount_; year++) {
-            uint256 mustaaPerYear = (isLeapYear(year) ? MUSTAA_LEAP_SHARE : MUSTAA_REGULAR_SHARE) * decimalsFactor;
-            
-            uint256 ownerTotalAmount = OWNER_TOTAL_SHARE * decimalsFactor;
-            if (mustaaPerYear + ownerTotalAmount > yearlySupplyCap(year) * decimalsFactor) {
-                revert YearlySupplyExceeded(year);
-            }
-            
-            _mint(mustaa_, mustaaPerYear, true, abi.encode(year, "Annual allocation for Mustaa"));
-
-            for (uint256 i = 0; i < owners_.length; i++) {
-                address owner = owners_[i];
-                uint256 ownerShare = (ownerTotalAmount * percentages[i]) / 10000;
-                
-                _mint(owner, ownerShare, true, abi.encode(year, "Annual allocation for owner"));
-            }
+            _mintYearlyTokens(year, owners_, ownershipData);
         }
     }
 
@@ -224,12 +287,25 @@ contract TimeToken is
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     /**
-     * @dev Determines if a given year is a leap year
+     * @dev Determines if a given year is a leap year according to the Gregorian calendar
      * @param year The year to check
      * @return bool True if it's a leap year, false otherwise
+     * 
+     * The rules are:
+     * 1. Years divisible by 4 are leap years
+     * 2. Exception: Century years (divisible by 100) are NOT leap years
+     * 3. Exception to the exception: Century years divisible by 400 ARE leap years
      */
     function isLeapYear(uint256 year) public pure returns (bool) {
-        return year == 2024 || year == 2028 || year == 2032;
+        if (year % 4 != 0) {
+            return false;
+        }
+        
+        if (year % 100 == 0) {
+            return year % 400 == 0;
+        }
+        
+        return true;
     }
 
     /**
@@ -276,6 +352,26 @@ contract TimeToken is
         }
     }
 
+    /**
+     * @notice Mints new tokens to a set of yacht owners for specific years
+     * @dev Only contract owner can call this function
+     * @param tokenYears Array of years to mint tokens for
+     * @param owners Array of yacht owner addresses to receive tokens
+     */
+    function mintForOwners(
+        uint256[] calldata tokenYears,
+        address[] calldata owners
+    ) public virtual onlyOwner {
+        // Validate ownership and get percentages
+        OwnershipData memory ownershipData = _validateOwnership(owners);
+        
+        // Mint tokens for each year
+        for (uint256 y = 0; y < tokenYears.length; y++) {
+            uint256 year = tokenYears[y];
+            _mintYearlyTokens(year, owners, ownershipData);
+        }
+    }
+
     function allowed(address account) public view virtual returns (bool) {
         return allowList.isAllowed(account);
     }
@@ -286,7 +382,9 @@ contract TimeToken is
      */
     function _verifyPermissions(address account) internal view {
         if (!allowList.isAllowed(account)) revert LSP7Disallowed(account);
-        if (!yachtOwnership.isOwner(account)) revert LSP7NotAnOwner(account);
+        
+        // Mustaa is exempt from yacht ownership requirement
+        if (account != mustaaAddress && !yachtOwnership.isOwner(account)) revert LSP7NotAnOwner(account);
     }
 
     /**
@@ -320,19 +418,25 @@ contract TimeToken is
     }
 
     /**
-     * @dev See {LSP7DigitalAssetInitAbstractTime-_updateOperator}.
-     * Adds allowlist and yacht ownership checks for operators
+     * @inheritdoc LSP7DigitalAssetInitAbstractTime
+     * @dev Override to add permission check for operators
      */
-    function _updateOperator(
-        address tokenOwner,
-        address operator, 
-        uint256 allowance,
-        bool notified,
-        bytes memory operatorNotificationData
-    ) internal virtual override {
-        _verifyPermissions(tokenOwner);
-        _verifyPermissions(operator);
-        
-        super._updateOperator(tokenOwner, operator, allowance, notified, operatorNotificationData);
+    function transfer(
+        address from,
+        address to,
+        uint256 amount,
+        bool force,
+        bytes memory data
+    ) public virtual override {
+        if (msg.sender != from) {
+            _verifyPermissions(msg.sender);
+            _spendAllowance({
+                operator: msg.sender,
+                tokenOwner: from,
+                amountToSpend: amount
+            });
+        }
+
+        _transfer(from, to, amount, force, data);
     }
 }

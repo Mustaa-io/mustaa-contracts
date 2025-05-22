@@ -12,6 +12,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 /**
  * @title YachtOwnership - A controlled digital asset contract for yacht ownership
  * @dev Extension of {LSP7} that implements a controlled ownership system for yacht tokens
+ * @author Mustaa
  * with an allowlist mechanism managed by an authorized account (owner).
  *
  * This contract is designed specifically for tokenizing yacht ownership, where:
