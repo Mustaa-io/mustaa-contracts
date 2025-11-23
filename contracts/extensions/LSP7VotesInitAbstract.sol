@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {
     LSP7DigitalAssetInitAbstract
-} from "../LSP7DigitalAssetInitAbstract.sol";
+} from "@lukso/lsp7-contracts/contracts/LSP7DigitalAssetInitAbstract.sol";
 import {
     _TYPEID_LSP7_VOTESDELEGATOR,
     _TYPEID_LSP7_VOTESDELEGATEE

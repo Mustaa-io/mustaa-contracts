@@ -28,9 +28,10 @@
   "dependencies": {
     "@erc725/smart-contracts-v8": "npm:@erc725/smart-contracts@8.0.0",
     "@lukso/lsp1-contracts": "~0.15.0",
+    "@lukso/lsp17contractextension-contracts": "~0.16.0",
     "@lukso/lsp2-contracts": "~0.15.0",
     "@lukso/lsp4-contracts": "~0.16.0",
-    "@lukso/lsp17contractextension-contracts": "~0.16.0",
+    "@lukso/lsp7-contracts": "^0.16.8",
     "@openzeppelin/contracts": "^4.9.6",
     "@openzeppelin/contracts-upgradeable": "^4.9.6"
   },
@@ -67,4 +68,3 @@
     "typescript": "^5.3.3"
   }
 }
-

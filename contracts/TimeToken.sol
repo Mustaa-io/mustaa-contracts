@@ -12,7 +12,7 @@ import {YachtOwnership} from "./YachtOwnership.sol";
 import {
     LSP7InvalidTransferBatch,
     LSP7CannotSendWithAddressZero
-} from "./LSP7Errors.sol";
+} from "@lukso/lsp7-contracts/contracts/LSP7Errors.sol";
 
 /**
  * @title TimeToken - A time-based token system for yacht usage rights

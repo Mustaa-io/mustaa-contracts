@@ -3,7 +3,7 @@
 pragma solidity ^0.8.4;
 
 // modules
-import {LSP7DigitalAsset} from "../LSP7DigitalAsset.sol";
+import {LSP7DigitalAsset} from "@lukso/lsp7-contracts/contracts/LSP7DigitalAsset.sol";
 
 /**
  * @dev Extension of {LSP7} that allows to implement an allowlist

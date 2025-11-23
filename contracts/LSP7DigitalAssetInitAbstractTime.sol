@@ -38,7 +38,7 @@ import {
     _TYPEID_LSP7_TOKENOPERATOR,
     _TYPEID_LSP7_TOKENSSENDER,
     _TYPEID_LSP7_TOKENSRECIPIENT
-} from "./LSP7Constants.sol";
+} from "@lukso/lsp7-contracts/contracts/LSP7Constants.sol";
 
 // errors
 
@@ -62,7 +62,7 @@ import {
     LSP7BatchCallFailed,
     LSP7RevokeOperatorNotAuthorized,
     LSP7DecreaseAllowanceNotAuthorized
-} from "./LSP7Errors.sol";
+} from "@lukso/lsp7-contracts/contracts/LSP7Errors.sol";
 
 /**
  * @title Proxy Implementation of the LSP7 Digital Asset standard, a contract that represents a fungible token.
