@@ -2,8 +2,8 @@
 
 pragma solidity ^0.8.4;
 
-// modules
 import {LSP7DigitalAssetInitAbstract} from "@lukso/lsp7-contracts/contracts/LSP7DigitalAssetInitAbstract.sol";
+import {LSP7CappedSupplyInitAbstract} from "@lukso/lsp7-contracts/contracts/extensions/LSP7CappedSupplyInitAbstract.sol";
 import {AllowList} from "./AllowList.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -31,7 +31,7 @@ contract YachtOwnership is
     Initializable,
     OwnableUpgradeable,
     UUPSUpgradeable,
-    LSP7DigitalAssetInitAbstract
+    LSP7CappedSupplyInitAbstract
 {
 
     /**
@@ -48,18 +48,6 @@ contract YachtOwnership is
      * @dev Emitted when a user loses ownership tokens (balance == 0).
      */
     event OwnershipLost(address indexed previousOwner);
-
-    /**
-     * @notice The `tokenSupplyCap` must be set and cannot be `0`.
-     * @dev Reverts when setting `0` for the {tokenSupplyCap}. The max token supply MUST be set to a number greater than 0.
-     */
-    error LSP7CappedSupplyRequired();
-
-    /**
-     * @notice Cannot mint anymore as total supply reached the maximum cap.
-     * @dev Reverts when trying to mint tokens but the {totalSupply} has reached the maximum {tokenSupplyCap}.
-     */
-    error LSP7CappedSupplyCannotMintOverCap();
  
     /**
      * @dev The operation failed because the user is not allowed.
@@ -67,7 +55,6 @@ contract YachtOwnership is
     error LSP7Disallowed(address user);
 
     // --- Storage
-    uint256 private _tokenSupplyCap;
     uint256 private _ownerCount;
 
     /**
@@ -76,22 +63,17 @@ contract YachtOwnership is
     AllowList public allowList;
     
     // Add a gap to prevent storage clashes in future upgrades
-    uint256[50] private __gap;
+    uint256[49] private __gap;
 
     /**
-     * @notice Deploying a `LSP7Mintable` token contract with: token name = `name_`, token symbol = `symbol_`, and
+     * @notice Deploying a `YachtOwnership` token contract with: token name = `name_`, token symbol = `symbol_`, and
      * address `newOwner_` as the token contract owner.
      *
      * @param name_ The name of the token.
      * @param symbol_ The symbol of the token.
      * @param newOwner_ The owner of the token contract.
+     * @param tokenSupplyCap_ The maximum token supply cap.
      * @param allowListAddress_ The address of the allowlist contract.
-     * 
-     * @notice Deploying a `LSP7CappedSupply` token contract with max token supply cap set to `tokenSupplyCap_`.
-     * @dev Deploy a `LSP7CappedSupply` token contract and set the maximum token supply token cap up to which
-     * it is not possible to mint more tokens.
-     *
-     * @param tokenSupplyCap_ The maximum token supply.
      *
      * @custom:requirements
      * - `tokenSupplyCap_` MUST NOT be 0.
@@ -103,11 +85,10 @@ contract YachtOwnership is
         uint256 tokenSupplyCap_,
         address allowListAddress_
     ) public virtual initializer {
-        // Initialize parent contracts
         __Ownable_init();
         __UUPSUpgradeable_init();
 
-        _initialize(
+        LSP7DigitalAssetInitAbstract._initialize(
             name_,
             symbol_,
             newOwner_,
@@ -115,11 +96,8 @@ contract YachtOwnership is
             false // isNonDivisible
         );
         
-        if (tokenSupplyCap_ == 0) {
-            revert LSP7CappedSupplyRequired();
-        }
-
-        _tokenSupplyCap = tokenSupplyCap_;
+        LSP7CappedSupplyInitAbstract._initialize(tokenSupplyCap_);
+        
         allowList = AllowList(allowListAddress_);
     }
 
@@ -180,18 +158,6 @@ contract YachtOwnership is
     }
 
     /**
-     * @notice The maximum supply amount of tokens allowed to exist is `_TOKEN_SUPPLY_CAP`.
-     *
-     * @dev Get the maximum number of tokens that can exist to circulate. Once {totalSupply} reaches
-     * reaches {totalSupplyCap}, it is not possible to mint more tokens.
-     *
-     * @return The maximum number of tokens that can exist in the contract.
-     */
-    function tokenSupplyCap() public view virtual returns (uint256) {
-        return _tokenSupplyCap;
-    }
-
-    /**
      * @dev See {LSP7-_update}.
      */
     function _update(address from, address to, uint256 amount, bool force, bytes memory data) internal virtual override {
@@ -199,7 +165,6 @@ contract YachtOwnership is
         if (to != address(0) && !allowed(to)) revert LSP7Disallowed(to);
         super._update(from, to, amount, force, data);
 
-        // Update ownership status after balance changes
         if (from != address(0)) {
             _updateOwnershipStatus(from);
         }
@@ -219,12 +184,7 @@ contract YachtOwnership is
     }
 
     /**
-     * @dev Same as {_mint} but allows to mint only if the {totalSupply} does not exceed the {tokenSupplyCap}
-     * after `amount` of tokens have been minted.
-     *
-     * @custom:requirements
-     * - {tokenSupplyCap} - {totalSupply} must be greater than zero.
-     * - `to` cannot be the zero address.
+     * @dev Override _mint to call parent capped supply logic then update ownership status
      */
     function _mint(
         address to,
@@ -232,18 +192,13 @@ contract YachtOwnership is
         bool force,
         bytes memory data
     ) internal virtual override {
-        if (totalSupply() + amount > tokenSupplyCap()) {
-            revert LSP7CappedSupplyCannotMintOverCap();
-        }
-
         super._mint(to, amount, force, data);
-
         _updateOwnershipStatus(to);
     }
 
     /**
      * @dev Public {_mint} function callable only by the contract owner.
-     * The token supply cap check is handled by the internal _mint function,
+     * The token supply cap check is handled by the parent LSP7CappedSupplyInitAbstract,
      * and the allowlist check is handled by the _update function.
      * 
      * @param to The address to mint tokens to

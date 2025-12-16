@@ -58,5 +58,7 @@ npx hardhat run scripts/deploy.ts --network luksoTestnet
 
 ## License
 
-Apache-2.0
+MIT
+
+This project uses MIT licensed contracts from LUKSO and OpenZeppelin. All contracts in this repository are licensed under MIT to maintain license compatibility.
 

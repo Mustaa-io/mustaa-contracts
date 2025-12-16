@@ -34,11 +34,8 @@ contract AllowList is
      * @param owner_ The owner who will manage the allowlist
      */
     function initialize(address owner_) public initializer {
-        // Initialize parent contracts
         __Ownable_init();
         __UUPSUpgradeable_init();
-        
-        // Transfer ownership
         _transferOwnership(owner_);
     }
 
@@ -84,10 +81,7 @@ contract AllowList is
      */
     function allowUsers(address[] calldata users) external onlyOwner {
         for (uint i = 0; i < users.length; i++) {
-            if (!_allowed[users[i]]) {
-                _allowed[users[i]] = true;
-                emit UserAllowed(users[i]);
-            }
+            allowUser(users[i]);
         }
     }
 
@@ -97,10 +91,7 @@ contract AllowList is
      */
     function disallowUsers(address[] calldata users) external onlyOwner {
         for (uint i = 0; i < users.length; i++) {
-            if (_allowed[users[i]]) {
-                _allowed[users[i]] = false;
-                emit UserDisallowed(users[i]);
-            }
+            disallowUser(users[i]);
         }
     }
 }

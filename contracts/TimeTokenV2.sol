@@ -28,7 +28,6 @@ contract TimeTokenV2 is TimeToken {
         uint256 startingYear_,
         uint256 yearCount_
     ) public override initializer {
-        // Call the parent TimeToken initializer
         TimeToken.initialize(
             name_,
             symbol_,

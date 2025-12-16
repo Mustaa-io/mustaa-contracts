@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-// modules
-import {LSP7DigitalAssetInitAbstractTime} from "./LSP7DigitalAssetInitAbstractTime.sol";
+import {LSP7DigitalAssetInitAbstract} from "@lukso/lsp7-contracts/contracts/LSP7DigitalAssetInitAbstract.sol";
 import {AllowList} from "./AllowList.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
@@ -11,14 +10,14 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {YachtOwnership} from "./YachtOwnership.sol";
 import {
     LSP7InvalidTransferBatch,
-    LSP7CannotSendWithAddressZero
+    LSP7CannotSendWithAddressZero,
+    LSP7AmountExceedsBalance
 } from "@lukso/lsp7-contracts/contracts/LSP7Errors.sol";
 
 /**
  * @title TimeToken - A time-based token system for yacht usage rights
  * @dev Implementation of LSP7 that manages time-based tokens with yearly allocations
  * @author Mustaa
- * based on ownership percentages and specific rules:
  * 
  * Key features:
  * - Yearly token distribution (365/366 tokens per year)
@@ -38,21 +37,17 @@ contract TimeToken is
     OwnableUpgradeable,
     ReentrancyGuardUpgradeable,
     UUPSUpgradeable,
-    LSP7DigitalAssetInitAbstractTime
+    LSP7DigitalAssetInitAbstract
 {
 
     // --- Errors
 
     error InvalidOwnerCount();
-    error InsufficientYearlyTokens(uint256 year);
     error YearlySupplyExceeded(uint256 year);
-    error InsufficientBalance(uint256 year, uint256 available, uint256 required);
-    error InvalidRecipient(address recipient);
     error InvalidOwnership(address owner, uint256 percentage);
     error OwnershipContractNotSet();
     error AllowListNotSet();
     error TotalOwnershipPercentageInvalid();
-    error YearlyBalanceInsufficient(uint256 year, uint256 available, uint256 required);
     error LSP7NotAnOwner(address recipient);
     error TokensNotExpired(uint256 year, uint256 currentYear);
 
@@ -93,6 +88,18 @@ contract TimeToken is
      */
     uint256 private constant OWNER_TOTAL_SHARE = 84;
 
+    // --- Yearly Tracking Storage (custom addition to base LSP7)
+
+    /**
+     * @dev Mapping from `year` to `tokenOwner` to yearly balance
+     */
+    mapping(uint256 => mapping(address => uint256)) internal _tokenOwnerYearlyBalances;
+
+    /**
+     * @dev Mapping from `year` to total yearly supply
+     */
+    mapping(uint256 => uint256) internal _yearlySupply;
+
     // --- References
 
     /**
@@ -111,7 +118,7 @@ contract TimeToken is
     address public mustaaAddress;
 
     // Add a gap to prevent storage clashes in future upgrades
-    uint256[50] private __gap;
+    uint256[47] private __gap;
 
     /**
      * @dev Helper struct to hold ownership validation results
@@ -361,39 +368,137 @@ contract TimeToken is
         if (account != mustaaAddress && !yachtOwnership.isOwner(account)) revert LSP7NotAnOwner(account);
     }
 
+    // --- LSP7 Overrides for Yearly Tracking ---
+
     /**
-     * @dev Hook that is called before any token transfer, including minting and burning.
-     * Validates addresses based on operation type:
-     * - Minting (from = address(0)): Check only recipient
-     * - Burning (to = address(0)): Check only sender
-     * - Regular Transfer: Check both addresses
-     *
-     * @param from The sender address
-     * @param to The recipient address
-     * @param amount The amount of token to transfer
-     * @param force A boolean that describe if transfer to a `to` address that does not support LSP1 is allowed or not.
-     * @param data The data sent alongside the transfer
+     * @dev Override decimals to return 1 instead of 18
      */
-    function _beforeTokenTransfer(
+    function decimals() public view virtual override returns (uint8) {
+        return _isNonDivisible ? 0 : 1;
+    }
+
+    /**
+     * @dev Override balanceOf to sum yearly balances up to current year
+     */
+    function balanceOf(
+        address tokenOwner
+    ) public view virtual override returns (uint256) {
+        uint256 currentYear = block.timestamp / 365 days + 1970;
+        uint256 totalBalance = 0;
+        
+        for (uint256 year = 1970; year <= currentYear; year++) {
+            totalBalance += _tokenOwnerYearlyBalances[year][tokenOwner];
+        }
+        
+        return totalBalance;
+    }
+
+    /**
+     * @notice Get balance for a specific year
+     * @param tokenOwner The address to check
+     * @param year The year to check balance for
+     * @return The token balance for that specific year
+     */
+    function balanceOfYear(
+        address tokenOwner,
+        uint256 year
+    ) public view virtual returns (uint256) {
+        return _tokenOwnerYearlyBalances[year][tokenOwner];
+    }
+
+    /**
+     * @notice Returns the total supply of tokens for a specific year
+     * @param year The year to check the supply for
+     * @return The total number of tokens minted for the specified year
+     */
+    function yearlySupply(uint256 year) public view returns (uint256) {
+        return _yearlySupply[year];
+    }
+
+    /**
+     * @dev Override _update to manage yearly tracking alongside base LSP7 storage
+     */
+    function _update(
         address from,
         address to,
         uint256 amount,
         bool force,
         bytes memory data
     ) internal virtual override {
+        if (data.length < 32) {
+            revert("LSP7Time: Invalid data format - year required");
+        }
+
+        uint256 year = uint256(bytes32(data));
+
+        if (from == address(0)) {
+            _tokenOwnerYearlyBalances[year][to] += amount;
+            _yearlySupply[year] += amount;
+        } else if (to == address(0)) {
+            unchecked {
+                _tokenOwnerYearlyBalances[year][from] -= amount;
+                _yearlySupply[year] -= amount;
+            }
+        } else {
+            unchecked {
+                _tokenOwnerYearlyBalances[year][from] -= amount;
+                _tokenOwnerYearlyBalances[year][to] += amount;
+            }
+        }
+        super._update(from, to, amount, force, data);
+    }
+
+    /**
+     * @dev Hook that is called before any token transfer, including minting and burning.
+     * Validates addresses based on operation type:
+     * - Minting (from = address(0)): Check only recipient
+     * - Burning (to = address(0)): Check only sender + validate yearly balance
+     * - Regular Transfer: Check both addresses + validate yearly balance
+     *
+     * @param from The sender address
+     * @param to The recipient address
+     * @param amount The amount of token to transfer
+     * @param data The data sent alongside the transfer
+     */
+    function _beforeTokenTransfer(
+        address from,
+        address to,
+        uint256 amount,
+        bool /* force */,
+        bytes memory data
+    ) internal virtual override {
         if (from == address(0)) {
             _verifyPermissions(to);
         } else if (to == address(0)) {
             _verifyPermissions(from);
+            
+            if (data.length < 32) {
+                revert("LSP7Time: Invalid data format - year required");
+            }
+            
+            uint256 year = uint256(bytes32(data));
+            uint256 fromBalance = _tokenOwnerYearlyBalances[year][from];
+            if (fromBalance < amount) {
+                revert LSP7AmountExceedsBalance(fromBalance, from, amount);
+            }
         } else {
             _verifyPermissions(from);
             _verifyPermissions(to);
+            
+            if (data.length < 32) {
+                revert("LSP7Time: Invalid data format - year required");
+            }
+            
+            uint256 year = uint256(bytes32(data));
+            uint256 fromBalance = _tokenOwnerYearlyBalances[year][from];
+            if (fromBalance < amount) {
+                revert LSP7AmountExceedsBalance(fromBalance, from, amount);
+            }
         }
     }
 
     /**
-     * @inheritdoc LSP7DigitalAssetInitAbstractTime
-     * @dev Override to add permission check for operators
+     * @dev Override transfer to add permission check for operators
      */
     function transfer(
         address from,
