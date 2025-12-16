@@ -64,7 +64,10 @@ describe("TimeToken", function () {
         MAX_SUPPLY,
         await allowList.getAddress()
       ],
-      { initializer: 'initialize' }
+      { 
+        initializer: 'initialize',
+        unsafeAllow: ['delegatecall']
+      }
     );
 
     // Mint yacht tokens for ownership percentages
@@ -98,7 +101,10 @@ describe("TimeToken", function () {
         STARTING_YEAR,
         5
       ],
-      { initializer: 'initialize' }
+      { 
+        initializer: 'initialize',
+        unsafeAllow: ['delegatecall']
+      }
     );
   });
 
@@ -208,7 +214,11 @@ describe("TimeToken", function () {
     it("Should upgrade to TimeTokenV2 and use new discount functionality", async function () {
       // Deploy the V2 implementation
       const TimeTokenV2 = await ethers.getContractFactory("TimeTokenV2");
-      const upgradedToken = await upgrades.upgradeProxy(await timeToken.getAddress(), TimeTokenV2);
+      const upgradedToken = await upgrades.upgradeProxy(
+        await timeToken.getAddress(), 
+        TimeTokenV2,
+        { unsafeAllow: ['delegatecall'] }
+      );
       
       // Check version function (new in V2)
       expect(await upgradedToken.version()).to.equal("v2.0");
@@ -234,7 +244,10 @@ describe("TimeToken", function () {
             STARTING_YEAR,
             5
           ],
-          { initializer: 'initialize' }
+          { 
+            initializer: 'initialize',
+            unsafeAllow: ['delegatecall']
+          }
         )
       ).to.be.revertedWithCustomError(TimeToken, "InvalidOwnership")
         .withArgs(nonOwner.address, 0);
@@ -252,7 +265,10 @@ describe("TimeToken", function () {
           MAX_SUPPLY,
           await allowList.getAddress()
         ],
-        { initializer: 'initialize' }
+        { 
+          initializer: 'initialize',
+          unsafeAllow: ['delegatecall']
+        }
       );
       
       // Allow owners but mint a split that doesn't equal 100%
@@ -279,7 +295,10 @@ describe("TimeToken", function () {
             STARTING_YEAR,
             5
           ],
-          { initializer: 'initialize' }
+          { 
+            initializer: 'initialize',
+            unsafeAllow: ['delegatecall']
+          }
         )
       ).to.be.revertedWithCustomError(TimeToken, "TotalOwnershipPercentageInvalid");
     });
@@ -303,7 +322,10 @@ describe("TimeToken", function () {
             pastYear, // Using a past year
             5
           ],
-          { initializer: 'initialize' }
+          { 
+            initializer: 'initialize',
+            unsafeAllow: ['delegatecall']
+          }
         )
       ).to.be.revertedWithCustomError(TimeToken, "InvalidStartingYear")
         .withArgs(pastYear, currentYear);
@@ -1094,7 +1116,8 @@ describe("TimeToken", function () {
       const YachtOwnershipV2 = await ethers.getContractFactory("YachtOwnershipV2");
       const upgradedYachtToken = await upgrades.upgradeProxy(
         await yachtToken.getAddress(),
-        YachtOwnershipV2
+        YachtOwnershipV2,
+        { unsafeAllow: ['delegatecall'] }
       );
       
       // Set a random user as VIP
@@ -1164,7 +1187,10 @@ describe("TimeToken", function () {
             STARTING_YEAR,
             5
           ],
-          { initializer: 'initialize' }
+          { 
+            initializer: 'initialize',
+            unsafeAllow: ['delegatecall']
+          }
         )
       ).to.be.revertedWithCustomError(TimeToken, "OwnershipContractNotSet");
     });
@@ -1276,7 +1302,10 @@ describe("TimeToken", function () {
           MAX_SUPPLY,
           await allowList.getAddress()
         ],
-        { initializer: 'initialize' }
+        { 
+          initializer: 'initialize',
+          unsafeAllow: ['delegatecall']
+        }
       );
       
       // Allow owners
@@ -1304,7 +1333,10 @@ describe("TimeToken", function () {
           STARTING_YEAR,
           1
         ],
-        { initializer: 'initialize' }
+        { 
+          initializer: 'initialize',
+          unsafeAllow: ['delegatecall']
+        }
       );
       
       // Try to mint to both owners

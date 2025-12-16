@@ -44,7 +44,10 @@ describe("YachtOwnership", function () {
         MAX_SUPPLY,
         await allowList.getAddress()
       ],
-      { initializer: 'initialize' }
+      { 
+        initializer: 'initialize',
+        unsafeAllow: ['delegatecall']
+      }
     );
 
     // Allow users for the tests (owner should be already allowed)
@@ -168,7 +171,8 @@ describe("YachtOwnership", function () {
       const YachtOwnershipV2 = await ethers.getContractFactory("YachtOwnershipV2");
       const upgradedToken = await upgrades.upgradeProxy(
         await yachtToken.getAddress(), 
-        YachtOwnershipV2
+        YachtOwnershipV2,
+        { unsafeAllow: ['delegatecall'] }
       );
       
       // Check version function (new in V2)
