@@ -8,13 +8,34 @@ import {TimeToken} from "./TimeToken.sol";
  * @dev Extends TimeToken with the ability to set discounts for specific users
  */
 contract TimeTokenV2 is TimeToken {
-    // New state variable for V2
+    /**
+     * @dev Constructor that disables initialization of the implementation contract.
+     * This prevents the implementation contract from being initialized directly,
+     * which is a security best practice for upgradeable contracts.
+     * The contract should only be initialized through a proxy.
+     */
+    constructor() {
+        _disableInitializers();
+    }
+
+    /**
+     * @dev Mapping of user addresses to their discount rates.
+     * @notice Discount rates are expressed as percentages (0-50).
+     */
     mapping(address => uint256) public discountRates;
     
-    // New event for discount setting
+    /**
+     * @dev Emitted when a discount rate is set for a user.
+     * @param user The address for which the discount was set
+     * @param rate The discount rate percentage
+     */
     event DiscountSet(address indexed user, uint256 rate);
     
-    // New error for V2
+    /**
+     * @dev The operation failed because the requested discount rate exceeds the maximum allowed.
+     * @param requested The requested discount rate
+     * @param maximum The maximum allowed discount rate
+     */
     error DiscountTooHigh(uint256 requested, uint256 maximum);
 
     function initialize(

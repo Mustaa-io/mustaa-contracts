@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
-import { Contract } from "ethers";
+import { Contract, Signer } from "ethers";
 
 describe("TimeToken", function () {
   let timeToken: any;
@@ -43,8 +43,11 @@ describe("TimeToken", function () {
     const AllowList = await ethers.getContractFactory("AllowList");
     allowList = await upgrades.deployProxy(
       AllowList,
-      [ownerAddress],
-      { initializer: 'initialize' }
+      [ownerAddress], // owner
+      { 
+        initializer: 'initialize',
+        unsafeAllow: ['constructor']
+      }
     );
 
     // Allow all test users
@@ -66,7 +69,7 @@ describe("TimeToken", function () {
       ],
       { 
         initializer: 'initialize',
-        unsafeAllow: ['delegatecall']
+        unsafeAllow: ['delegatecall', 'constructor']
       }
     );
 
@@ -74,17 +77,6 @@ describe("TimeToken", function () {
     await yachtToken.mint(owner1Address, ethers.parseEther("350"), true, "0x");
     await yachtToken.mint(owner2Address, ethers.parseEther("350"), true, "0x");
     await yachtToken.mint(mustaaAddress, ethers.parseEther("300"), true, "0x");
-    
-    // Log ownership percentages for debugging
-    console.log("Ownership Percentages:");
-    console.log("- owner1:", (await yachtToken.getOwnershipPercentage(owner1Address)).toString());
-    console.log("- owner2:", (await yachtToken.getOwnershipPercentage(owner2Address)).toString());
-    console.log("- mustaa:", (await yachtToken.getOwnershipPercentage(mustaaAddress)).toString());
-    console.log("Total:", (
-      (await yachtToken.getOwnershipPercentage(owner1Address)) +
-      (await yachtToken.getOwnershipPercentage(owner2Address)) +
-      (await yachtToken.getOwnershipPercentage(mustaaAddress))
-    ).toString());
 
     // Then deploy TimeToken
     const TimeToken = await ethers.getContractFactory("TimeToken");
@@ -103,12 +95,33 @@ describe("TimeToken", function () {
       ],
       { 
         initializer: 'initialize',
-        unsafeAllow: ['delegatecall']
+        unsafeAllow: ['delegatecall', 'constructor']
       }
     );
   });
 
   describe("Proxy Deployment", function () {
+    it("Should prevent direct initialization of implementation contract", async function () {
+      // Deploy implementation contract directly (not via proxy)
+      const TimeToken = await ethers.getContractFactory("TimeToken");
+      const implementation = await TimeToken.deploy();
+      
+      // Try to initialize the implementation directly - should fail
+      await expect(
+        implementation.initialize(
+          TOKEN_NAME,
+          TOKEN_SYMBOL,
+          ownerAddress,
+          mustaaAddress,
+          [owner1Address, owner2Address],
+          await yachtToken.getAddress(),
+          await allowList.getAddress(),
+          STARTING_YEAR,
+          1
+        )
+      ).to.be.revertedWith("Initializable: contract is already initialized");
+    });
+
     it("Should deploy via proxy and initialize correctly", async function () {
       // Check that implementation address exists
       const implementationAddress = await upgrades.erc1967.getImplementationAddress(
@@ -132,24 +145,12 @@ describe("TimeToken", function () {
       // Since Mustaa doesn't participate in the 84 token distribution,
       // we calculate based on the relative percentages of owner1 and owner2 only
       const totalNonMustaaPercentage = owner1SharePct + owner2SharePct; // 7000
-      const expectedOwner1Share = (BigInt(84) * BigInt(owner1SharePct)) / BigInt(totalNonMustaaPercentage); // 42
-      const expectedOwner2Share = (BigInt(84) * BigInt(owner2SharePct)) / BigInt(totalNonMustaaPercentage); // 42
+      const expectedOwner1Share = (BigInt(84) * BigInt(owner1SharePct)) / BigInt(totalNonMustaaPercentage);
+      const expectedOwner2Share = (BigInt(84) * BigInt(owner2SharePct)) / BigInt(totalNonMustaaPercentage);
       
-      // Log expected shares for debugging
-      console.log("Expected Shares:");
-      console.log("- owner1:", expectedOwner1Share.toString());
-      console.log("- owner2:", expectedOwner2Share.toString());
-      console.log("- mustaa (special share only):", expectedMustaaSpecialShare.toString());
-      
-      // Log actual balances
       const actualOwner1Balance = await timeToken.balanceOfYear(owner1Address, STARTING_YEAR);
       const actualOwner2Balance = await timeToken.balanceOfYear(owner2Address, STARTING_YEAR);
       const actualMustaaBalance = await timeToken.balanceOfYear(mustaaAddress, STARTING_YEAR);
-      
-      console.log("Actual Balances:");
-      console.log("- owner1:", actualOwner1Balance.toString());
-      console.log("- owner2:", actualOwner2Balance.toString());
-      console.log("- mustaa:", actualMustaaBalance.toString());
       
       // Check balances with exact expected values
       // Mustaa only gets their special allocation (281/282), no share of the 84 tokens
@@ -217,7 +218,7 @@ describe("TimeToken", function () {
       const upgradedToken = await upgrades.upgradeProxy(
         await timeToken.getAddress(), 
         TimeTokenV2,
-        { unsafeAllow: ['delegatecall'] }
+        { unsafeAllow: ['delegatecall', 'constructor'] }
       );
       
       // Check version function (new in V2)
@@ -246,7 +247,7 @@ describe("TimeToken", function () {
           ],
           { 
             initializer: 'initialize',
-            unsafeAllow: ['delegatecall']
+            unsafeAllow: ['delegatecall', 'constructor']
           }
         )
       ).to.be.revertedWithCustomError(TimeToken, "InvalidOwnership")
@@ -267,7 +268,7 @@ describe("TimeToken", function () {
         ],
         { 
           initializer: 'initialize',
-          unsafeAllow: ['delegatecall']
+          unsafeAllow: ['delegatecall', 'constructor']
         }
       );
       
@@ -297,7 +298,7 @@ describe("TimeToken", function () {
           ],
           { 
             initializer: 'initialize',
-            unsafeAllow: ['delegatecall']
+            unsafeAllow: ['delegatecall', 'constructor']
           }
         )
       ).to.be.revertedWithCustomError(TimeToken, "TotalOwnershipPercentageInvalid");
@@ -324,7 +325,7 @@ describe("TimeToken", function () {
           ],
           { 
             initializer: 'initialize',
-            unsafeAllow: ['delegatecall']
+            unsafeAllow: ['delegatecall', 'constructor']
           }
         )
       ).to.be.revertedWithCustomError(TimeToken, "InvalidStartingYear")
@@ -424,15 +425,11 @@ describe("TimeToken", function () {
         
         const receipt = await tx.wait();
         
-        // Debug: log all events to see what's available
-        console.log("Events in transaction:", receipt.events?.map(e => e.event || e.eventName));
-        
         // Try to find the Transfer event - try both property names
-        let transferEvent = receipt.events?.find(e => e.event === "Transfer" || e.eventName === "Transfer");
+        let transferEvent = receipt.events?.find((e: any) => e.event === "Transfer" || e.eventName === "Transfer");
         
         // If not found, look at the logs directly
         if (!transferEvent) {
-            console.log("Events not found by name, checking logs...");
             // The Transfer event should be emitted from the contract
             const transferInterface = new ethers.Interface([
                 "event Transfer(address indexed operator, address indexed from, address indexed to, uint256 amount, bool force, bytes data)"
@@ -630,9 +627,9 @@ describe("TimeToken", function () {
         "0x"
       );
       
-      // Verify authorization succeeded
+      // Verify authorization was zeroed because operator is not in allowlist
       expect(await timeToken.authorizedAmountFor(nonAllowedOperator.address, mustaaAddress))
-        .to.equal(amount);
+        .to.equal(0);
       
       // When operator tries to transfer, it should revert due to not being in allowList
       const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
@@ -677,6 +674,13 @@ describe("TimeToken", function () {
       // Allow operator and also make them a yacht owner
       await allowList.allowUser(newOperator.address);
       await yachtToken.mint(newOperator.address, ethers.parseEther("1"), true, "0x");
+      
+      // Re-authorize operator now that they're in the allowlist (previous authorization was zeroed)
+      await timeToken.connect(mustaa).authorizeOperator(
+        newOperator.address,
+        amount,
+        "0x"
+      );
       
       // Now operator should be able to transfer
       await timeToken.connect(newOperator).transfer(
@@ -746,15 +750,11 @@ describe("TimeToken", function () {
       
       const receipt = await tx.wait();
       
-      // Debug: log all events to see what's available
-      console.log("Available events:", receipt.events?.map(e => e.event || e.eventName));
-      
       // Try different approaches to find the event
-      let event = receipt.events?.find(e => e.event === "OperatorAuthorizationChanged" || e.eventName === "OperatorAuthorizationChanged");
+      let event = receipt.events?.find((e: any) => e.event === "OperatorAuthorizationChanged" || e.eventName === "OperatorAuthorizationChanged");
       
       // If still not found, parse logs directly
       if (!event) {
-        console.log("Events not found by name, checking logs directly...");
         // Define the event interface
         const eventInterface = new ethers.Interface([
           "event OperatorAuthorizationChanged(address indexed operator, address indexed tokenOwner, uint256 indexed amount, bytes operatorNotificationData)"
@@ -776,11 +776,6 @@ describe("TimeToken", function () {
             // Not this event, continue to next log
           }
         }
-      }
-      
-      // If event is still not found, log all raw logs
-      if (!event) {
-        console.log("Raw logs:", receipt.logs);
       }
       
       expect(event).to.not.be.undefined;
@@ -851,6 +846,76 @@ describe("TimeToken", function () {
       // Verify authorization is revoked
       expect(await timeToken.authorizedAmountFor(newOperator.address, mustaaAddress))
         .to.equal(0);
+    });
+
+    it("Should automatically zero operator allowance when operator is disallowed", async function() {
+      const amount = BigInt(20) * BigInt(10);
+      const newOperator = (await ethers.getSigners())[7];
+      
+      // First allow the operator and make them a yacht owner
+      await allowList.allowUser(newOperator.address);
+      await yachtToken.mint(newOperator.address, ethers.parseEther("1"), true, "0x");
+      
+      // Authorize operator
+      await timeToken.connect(mustaa).authorizeOperator(
+        newOperator.address,
+        amount,
+        "0x"
+      );
+      
+      // Verify authorization
+      expect(await timeToken.authorizedAmountFor(newOperator.address, mustaaAddress))
+        .to.equal(amount);
+      
+      // Now remove operator from allowList
+      await allowList.disallowUser(newOperator.address);
+      
+      // Try to set allowance again - should automatically zero it
+      await timeToken.connect(mustaa).authorizeOperator(
+        newOperator.address,
+        amount,
+        "0x"
+      );
+      
+      // The allowance should be zero because operator is disallowed
+      expect(await timeToken.authorizedAmountFor(newOperator.address, mustaaAddress))
+        .to.equal(0);
+    });
+
+    it("Should prevent disallowed operator from using existing allowance to transfer", async function() {
+      const amount = BigInt(20) * BigInt(10);
+      const newOperator = (await ethers.getSigners())[7];
+      const recipient = (await ethers.getSigners())[8];
+      
+      // First allow the operator and recipient, and make them yacht owners
+      await allowList.allowUser(newOperator.address);
+      await allowList.allowUser(recipient.address);
+      await yachtToken.mint(newOperator.address, ethers.parseEther("1"), true, "0x");
+      await yachtToken.mint(recipient.address, ethers.parseEther("1"), true, "0x");
+      
+      // Authorize operator
+      await timeToken.connect(mustaa).authorizeOperator(
+        newOperator.address,
+        amount,
+        "0x"
+      );
+      
+      // Now remove operator from allowList
+      await allowList.disallowUser(newOperator.address);
+      
+      // Try to use the allowance - should fail because operator is not allowed
+      const year = STARTING_YEAR;
+      const yearData = ethers.AbiCoder.defaultAbiCoder().encode(["uint256"], [year]);
+      
+      await expect(
+        timeToken.connect(newOperator).transfer(
+          mustaaAddress,
+          recipient.address,
+          amount,
+          true,
+          yearData
+        )
+      ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed").withArgs(newOperator.address);
     });
     
     it("Should increase allowance", async function() {
@@ -967,10 +1032,12 @@ describe("TimeToken", function () {
   });
 
   describe("YachtOwnership Integration", function () {
-    let nonAllowedUser;
+    let nonAllowedUser: Signer;
+    let nonAllowedUserAddress: string;
     
     beforeEach(async function () {
       nonAllowedUser = (await ethers.getSigners())[5];
+      nonAllowedUserAddress = await nonAllowedUser.getAddress();
     });
     
     it("Should prevent transferring to addresses not allowed in allowList", async function () {
@@ -980,13 +1047,13 @@ describe("TimeToken", function () {
       await expect(
         timeToken.connect(mustaa).transfer(
           mustaaAddress,
-          nonAllowedUser.address,
+          nonAllowedUserAddress,
           100,
           true,
           data
         )
       ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed")
-        .withArgs(nonAllowedUser.address);
+        .withArgs(nonAllowedUserAddress);
     });
     
     it("Should allow transfers after recipient is allowed in allowList", async function () {
@@ -998,30 +1065,30 @@ describe("TimeToken", function () {
       await expect(
         timeToken.connect(mustaa).transfer(
           mustaaAddress,
-          nonAllowedUser.address,
+          nonAllowedUserAddress,
           transferAmount,
           true,
           data
         )
       ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed")
-        .withArgs(nonAllowedUser.address);
+        .withArgs(nonAllowedUserAddress);
       
       // Now allow the user in the centralized allowList
-      await allowList.allowUser(nonAllowedUser.address);
+      await allowList.allowUser(nonAllowedUserAddress);
       
       // Make the user a yacht owner too - this is required by _verifyPermissions
-      await yachtToken.mint(nonAllowedUser.address, ethers.parseEther("1"), true, "0x");
+      await yachtToken.mint(nonAllowedUserAddress, ethers.parseEther("1"), true, "0x");
       
       // Transfer should now succeed
       await timeToken.connect(mustaa).transfer(
         mustaaAddress,
-        nonAllowedUser.address,
+        nonAllowedUserAddress,
         transferAmount,
         true,
         data
       );
       
-      expect(await timeToken.balanceOfYear(nonAllowedUser.address, year)).to.equal(transferAmount);
+      expect(await timeToken.balanceOfYear(nonAllowedUserAddress, year)).to.equal(transferAmount);
     });
     
     it("Should prevent transfers if user is disallowed in allowList", async function () {
@@ -1030,37 +1097,37 @@ describe("TimeToken", function () {
       const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [year]);
       
       // First allow the user
-      await allowList.allowUser(nonAllowedUser.address);
+      await allowList.allowUser(nonAllowedUserAddress);
       
       // Also make them a yacht owner
-      await yachtToken.mint(nonAllowedUser.address, ethers.parseEther("1"), true, "0x");
+      await yachtToken.mint(nonAllowedUserAddress, ethers.parseEther("1"), true, "0x");
       
       // Transfer some tokens
       await timeToken.connect(mustaa).transfer(
         mustaaAddress,
-        nonAllowedUser.address,
+        nonAllowedUserAddress,
         transferAmount,
         true,
         data
       );
       
       // Now disallow the user
-      await allowList.disallowUser(nonAllowedUser.address);
+      await allowList.disallowUser(nonAllowedUserAddress);
       
       // User should have tokens but not be able to transfer them
-      expect(await timeToken.balanceOfYear(nonAllowedUser.address, year)).to.equal(transferAmount);
+      expect(await timeToken.balanceOfYear(nonAllowedUserAddress, year)).to.equal(transferAmount);
       
       // Try to transfer to an allowed address - should fail
       await expect(
         timeToken.connect(nonAllowedUser).transfer(
-          nonAllowedUser.address,
+          nonAllowedUserAddress,
           owner1Address,
           transferAmount,
           true,
           data
         )
       ).to.be.revertedWithCustomError(timeToken, "LSP7Disallowed")
-        .withArgs(nonAllowedUser.address);
+        .withArgs(nonAllowedUserAddress);
     });
   });
 
@@ -1117,7 +1184,7 @@ describe("TimeToken", function () {
       const upgradedYachtToken = await upgrades.upgradeProxy(
         await yachtToken.getAddress(),
         YachtOwnershipV2,
-        { unsafeAllow: ['delegatecall'] }
+        { unsafeAllow: ['delegatecall', 'constructor'] }
       );
       
       // Set a random user as VIP
@@ -1189,7 +1256,7 @@ describe("TimeToken", function () {
           ],
           { 
             initializer: 'initialize',
-            unsafeAllow: ['delegatecall']
+            unsafeAllow: ['delegatecall', 'constructor']
           }
         )
       ).to.be.revertedWithCustomError(TimeToken, "OwnershipContractNotSet");
@@ -1199,7 +1266,9 @@ describe("TimeToken", function () {
   describe("mintForOwners function", function () {
     it("Should allow contract owner to mint new tokens to yacht owners", async function () {
       const decimalsFactor = BigInt(10) ** BigInt(1);
-      const year = 2030; // A future year not included in initialization
+      // Use a year that's definitely not in the initialization range (STARTING_YEAR + 5)
+      // STARTING_YEAR is CURRENT_YEAR, so we need a year after CURRENT_YEAR + 5
+      const year = STARTING_YEAR + 10; // A future year not included in initialization
       
       // Get initial balances
       const initialBalance1 = await timeToken.balanceOfYear(owner1Address, year);
@@ -1304,7 +1373,7 @@ describe("TimeToken", function () {
         ],
         { 
           initializer: 'initialize',
-          unsafeAllow: ['delegatecall']
+          unsafeAllow: ['delegatecall', 'constructor']
         }
       );
       
@@ -1335,7 +1404,7 @@ describe("TimeToken", function () {
         ],
         { 
           initializer: 'initialize',
-          unsafeAllow: ['delegatecall']
+          unsafeAllow: ['delegatecall', 'constructor']
         }
       );
       
@@ -1378,7 +1447,8 @@ describe("TimeToken", function () {
     });
     
     it("Should prevent minting that would exceed yearly supply cap", async function () {
-      const year = 2030;
+      // Use a year that's definitely not in the initialization range
+      const year = STARTING_YEAR + 10;
       
       // First mint tokens for the maximum owner share (84 tokens)
       await timeToken.mintForOwners(
@@ -1408,7 +1478,7 @@ describe("TimeToken", function () {
 
   describe("Token expiry and burning", function () {
     // Use a timestamp counter to ensure we always move forward
-    let futureTimestampBase;
+    let futureTimestampBase: number | undefined;
     let testCounter = 0;
     
     beforeEach(async function() {
@@ -1427,9 +1497,10 @@ describe("TimeToken", function () {
       
       // Verify current blockchain year
       const latestBlock = await ethers.provider.getBlock('latest');
+      if (!latestBlock) {
+        throw new Error("Failed to get latest block");
+      }
       const currentYear = Math.floor(latestBlock.timestamp / (365 * 24 * 60 * 60)) + 1970;
-      console.log("Current blockchain year for tests:", currentYear);
-      console.log("Current timestamp:", latestBlock.timestamp);
     });
 
     it("Should allow owner to burn expired tokens from any past year", async function () {
@@ -1438,8 +1509,7 @@ describe("TimeToken", function () {
         
         // Get initial balance for past year
         const initialBalance = await timeToken.balanceOfYear(mustaaAddress, pastYear);
-        console.log(`Initial balance for ${pastYear}:`, initialBalance.toString());
-        expect(initialBalance).to.be.gt(0); // Verify we have tokens to burn
+        expect(initialBalance).to.be.gt(0);
         
         // Get initial supply
         const initialSupply = await timeToken.yearlySupply(pastYear);
@@ -1457,7 +1527,10 @@ describe("TimeToken", function () {
     it("Should not allow burning current year tokens", async function () {
         // Get the current blockchain year
         const latestBlock = await ethers.provider.getBlock('latest');
-        const currentYear = Math.floor(latestBlock?.timestamp / (365 * 24 * 60 * 60)) + 1970;
+        if (!latestBlock) {
+          throw new Error("Failed to get latest block");
+        }
+        const currentYear = Math.floor(latestBlock.timestamp / (365 * 24 * 60 * 60)) + 1970;
         
         await expect(
             timeToken.burnExpiredTokens(mustaaAddress, currentYear)
@@ -1485,10 +1558,10 @@ describe("TimeToken", function () {
         
         // Make sure blockchain timestamp is far enough in the future
         const latestBlock = await ethers.provider.getBlock('latest');
+        if (!latestBlock) {
+          throw new Error("Failed to get latest block");
+        }
         const currentYear = Math.floor(latestBlock.timestamp / (365 * 24 * 60 * 60)) + 1970;
-        console.log("Current blockchain year:", currentYear);
-        console.log("Test past year:", pastYear);
-        console.log("STARTING_YEAR:", STARTING_YEAR);
         
         // Explicitly verify that our time manipulation worked and the year is in the past
         expect(currentYear).to.equal(2030); // First verify we're in 2030
@@ -1532,9 +1605,10 @@ describe("TimeToken", function () {
         
         // Verify this year is in the past
         const latestBlock = await ethers.provider.getBlock('latest');
+        if (!latestBlock) {
+          throw new Error("Failed to get latest block");
+        }
         const currentYear = Math.floor(latestBlock.timestamp / (365 * 24 * 60 * 60)) + 1970;
-        console.log("Current blockchain year:", currentYear);
-        console.log("Test past year:", pastYear);
         
         // Explicitly verify that our time manipulation worked and the year is in the past
         expect(currentYear).to.equal(2030); // First verify we're in 2030

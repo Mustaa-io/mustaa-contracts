@@ -8,10 +8,27 @@ import {YachtOwnership} from "./YachtOwnership.sol";
  * @dev Extends YachtOwnership with the ability to assign VIP status to users
  */
 contract YachtOwnershipV2 is YachtOwnership {
-    // Mapping to track VIP status of users
+    /**
+     * @dev Constructor that disables initialization of the implementation contract.
+     * This prevents the implementation contract from being initialized directly,
+     * which is a security best practice for upgradeable contracts.
+     * The contract should only be initialized through a proxy.
+     */
+    constructor() {
+        _disableInitializers();
+    }
+
+    /**
+     * @dev Mapping of user addresses to their VIP status.
+     * @notice VIP status grants special privileges to users.
+     */
     mapping(address => bool) public isVIP;
     
-    // Event for VIP status changes
+    /**
+     * @dev Emitted when VIP status is changed for a user.
+     * @param user The address whose VIP status was changed
+     * @param status The new VIP status (true for VIP, false for non-VIP)
+     */
     event VIPStatusChanged(address indexed user, bool status);
 
     function initialize(

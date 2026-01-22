@@ -15,6 +15,16 @@ contract AllowList is
     UUPSUpgradeable
 {
     /**
+     * @dev Constructor that disables initialization of the implementation contract.
+     * This prevents the implementation contract from being initialized directly,
+     * which is a security best practice for upgradeable contracts.
+     * The contract should only be initialized through a proxy.
+     */
+    constructor() {
+        _disableInitializers();
+    }
+
+    /**
      * @dev Allowed status of addresses. True if allowed, False otherwise.
      */
     mapping(address => bool) private _allowed;
@@ -30,8 +40,15 @@ contract AllowList is
     event UserDisallowed(address indexed user);
 
     /**
-     * @dev Initialize the contract
+     * @notice Initializes the AllowList contract.
+     * @dev Sets up the contract with an owner. This function should be called
+     *      atomically during proxy deployment via OpenZeppelin's upgradeable plugin
+     *      to prevent front-running attacks.
+     *
      * @param owner_ The owner who will manage the allowlist
+     *
+     * @custom:security This function is protected by the `initializer` modifier and should
+     *                  only be called atomically during proxy deployment to prevent front-running.
      */
     function initialize(address owner_) public initializer {
         __Ownable_init();

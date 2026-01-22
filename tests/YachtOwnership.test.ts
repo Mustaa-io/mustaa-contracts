@@ -1,16 +1,16 @@
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
-import { Contract } from "ethers";
+import { Signer } from "ethers";
 
 describe("YachtOwnership", function () {
-  let yachtToken;
-  let allowList;
-  let owner;
-  let user1;
-  let user2;
-  let ownerAddress;
-  let user1Address;
-  let user2Address;
+  let yachtToken: any;
+  let allowList: any;
+  let owner: Signer;
+  let user1: Signer;
+  let user2: Signer;
+  let ownerAddress: string;
+  let user1Address: string;
+  let user2Address: string;
   
   const TOKEN_NAME = "Yacht Token";
   const TOKEN_SYMBOL = "YACHT";
@@ -25,16 +25,26 @@ describe("YachtOwnership", function () {
 
     // First deploy the AllowList
     const AllowList = await ethers.getContractFactory("AllowList");
+    // Note: 'constructor' flag is required because the contract has a constructor
+    // that calls _disableInitializers() - this is the recommended OpenZeppelin pattern
+    // The warning is expected and safe in this context.
     allowList = await upgrades.deployProxy(
       AllowList,
-      [ownerAddress],
-      { initializer: 'initialize' }
+      [ownerAddress], // owner
+      { 
+        initializer: 'initialize',
+        unsafeAllow: ['constructor']
+      }
     );
 
     // Deploy the token contract using proxy pattern
     const YachtOwnership = await ethers.getContractFactory("YachtOwnership");
     
     // Deploy as proxy with initialization
+    // Note: 'delegatecall' and 'constructor' flags are required for UUPS upgradeable contracts.
+    // - 'delegatecall': Required because UUPS uses delegatecall in upgrade mechanism (standard pattern)
+    // - 'constructor': Required because the contract has a constructor that calls _disableInitializers()
+    // The warnings are expected and safe - they're informational, not errors.
     yachtToken = await upgrades.deployProxy(
       YachtOwnership,
       [
@@ -46,7 +56,7 @@ describe("YachtOwnership", function () {
       ],
       { 
         initializer: 'initialize',
-        unsafeAllow: ['delegatecall']
+        unsafeAllow: ['delegatecall', 'constructor']
       }
     );
 
@@ -78,6 +88,23 @@ describe("YachtOwnership", function () {
     
     it("Owner should be allowed by default", async function () {
       expect(await yachtToken.allowed(ownerAddress)).to.equal(true);
+    });
+
+    it("Should prevent direct initialization of implementation contract", async function () {
+      // Deploy implementation contract directly (not via proxy)
+      const YachtOwnership = await ethers.getContractFactory("YachtOwnership");
+      const implementation = await YachtOwnership.deploy();
+      
+      // Try to initialize the implementation directly - should fail
+      await expect(
+        implementation.initialize(
+          TOKEN_NAME,
+          TOKEN_SYMBOL,
+          ownerAddress,
+          MAX_SUPPLY,
+          await allowList.getAddress()
+        )
+      ).to.be.revertedWith("Initializable: contract is already initialized");
     });
   });
 
@@ -172,7 +199,7 @@ describe("YachtOwnership", function () {
       const upgradedToken = await upgrades.upgradeProxy(
         await yachtToken.getAddress(), 
         YachtOwnershipV2,
-        { unsafeAllow: ['delegatecall'] }
+        { unsafeAllow: ['delegatecall', 'constructor'] }
       );
       
       // Check version function (new in V2)
@@ -196,6 +223,114 @@ describe("YachtOwnership", function () {
     await expect(
       allowList.connect(user1).disallowUser(user2Address)
     ).to.be.revertedWith("Ownable: caller is not the owner");
+  });
+
+  describe("Security: Operator Allowance Revocation", function () {
+    beforeEach(async function () {
+      // Mint tokens to user1 for operator tests
+      await yachtToken.mint(user1Address, ethers.parseEther("100"), true, "0x");
+    });
+
+    it("Should automatically zero operator allowance when operator is disallowed", async function () {
+      const operator = user2Address;
+      const allowanceAmount = ethers.parseEther("50");
+      
+      // user1 authorizes user2 as an operator
+      await yachtToken.connect(user1).authorizeOperator(
+        operator,
+        allowanceAmount,
+        "0x"
+      );
+      
+      // Verify the allowance was set
+      expect(await yachtToken.authorizedAmountFor(operator, user1Address))
+        .to.equal(allowanceAmount);
+      
+      // Now disallow the operator from the allowlist
+      await allowList.disallowUser(operator);
+      
+      // Try to update the operator allowance - should automatically zero it
+      // This simulates what happens when _updateOperator is called
+      // The allowance should be zeroed because operator is not allowed
+      await yachtToken.connect(user1).authorizeOperator(
+        operator,
+        allowanceAmount, // Try to set allowance again
+        "0x"
+      );
+      
+      // The allowance should be zero because operator is disallowed
+      expect(await yachtToken.authorizedAmountFor(operator, user1Address))
+        .to.equal(0);
+    });
+
+    it("Should prevent disallowed operator from using existing allowance to transfer", async function () {
+      const operator = user2Address;
+      const allowanceAmount = ethers.parseEther("50");
+      
+      // user1 authorizes user2 as an operator
+      await yachtToken.connect(user1).authorizeOperator(
+        operator,
+        allowanceAmount,
+        "0x"
+      );
+      
+      // Verify the allowance was set
+      expect(await yachtToken.authorizedAmountFor(operator, user1Address))
+        .to.equal(allowanceAmount);
+      
+      // Now disallow the operator from the allowlist
+      await allowList.disallowUser(operator);
+      
+      // Try to use the allowance - should fail because operator is not allowed
+      await expect(
+        yachtToken.connect(user2).transfer(
+          user1Address,
+          user2Address,
+          ethers.parseEther("30"),
+          true,
+          "0x"
+        )
+      ).to.be.revertedWithCustomError(yachtToken, "LSP7Disallowed").withArgs(operator);
+    });
+
+    it("Should not restore previous allowance when re-allowing a user", async function () {
+      const operator = user2Address;
+      const allowanceAmount = ethers.parseEther("50");
+      
+      // user1 authorizes user2 as an operator
+      await yachtToken.connect(user1).authorizeOperator(
+        operator,
+        allowanceAmount,
+        "0x"
+      );
+      
+      // Disallow the operator
+      await allowList.disallowUser(operator);
+      
+      // Try to set allowance - should be zeroed
+      await yachtToken.connect(user1).authorizeOperator(
+        operator,
+        allowanceAmount,
+        "0x"
+      );
+      
+      // Allow the operator again
+      await allowList.allowUser(operator);
+      
+      // Previous allowance should still be zero (not restored)
+      expect(await yachtToken.authorizedAmountFor(operator, user1Address))
+        .to.equal(0);
+      
+      // Now can set a new allowance
+      await yachtToken.connect(user1).authorizeOperator(
+        operator,
+        allowanceAmount,
+        "0x"
+      );
+      
+      expect(await yachtToken.authorizedAmountFor(operator, user1Address))
+        .to.equal(allowanceAmount);
+    });
   });
 
   it("Should calculate ownership percentage correctly", async function () {
