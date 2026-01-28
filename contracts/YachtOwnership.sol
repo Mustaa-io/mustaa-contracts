@@ -5,9 +5,9 @@ pragma solidity ^0.8.4;
 import {LSP7DigitalAssetInitAbstract} from "@lukso/lsp7-contracts/contracts/LSP7DigitalAssetInitAbstract.sol";
 import {LSP7CappedSupplyInitAbstract} from "@lukso/lsp7-contracts/contracts/extensions/LSP7CappedSupplyInitAbstract.sol";
 import {AllowList} from "./AllowList.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
  * @title YachtOwnership
@@ -179,11 +179,11 @@ contract YachtOwnership is
         
         if (balance > 0 && !isCurrentlyOwner) {
             _isOwner[account] = true;
-            _ownerCount++;
+            ++_ownerCount;
             emit OwnershipAcquired(account);
         } else if (balance == 0 && isCurrentlyOwner) {
             _isOwner[account] = false;
-            _ownerCount--;
+            --_ownerCount;
             emit OwnershipLost(account);
         }
     }

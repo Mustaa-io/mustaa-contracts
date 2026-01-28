@@ -8,11 +8,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {YachtOwnership} from "./YachtOwnership.sol";
-import {
-    LSP7InvalidTransferBatch,
-    LSP7CannotSendWithAddressZero,
-    LSP7AmountExceedsBalance
-} from "@lukso/lsp7-contracts/contracts/LSP7Errors.sol";
+import {LSP7AmountExceedsBalance} from "@lukso/lsp7-contracts/contracts/LSP7Errors.sol";
 
 /**
  * @title TimeToken
@@ -65,6 +61,7 @@ contract TimeToken is
     error TotalOwnershipPercentageInvalid();
     error LSP7NotAnOwner(address recipient);
     error TokensNotExpired(uint256 year, uint256 currentYear);
+    error YearNotProvided(bytes data);
 
     /**
      * @dev The operation failed because the user is not allowed.
@@ -174,7 +171,7 @@ contract TimeToken is
             data.mustaaPercentage = yachtOwnership.getOwnershipPercentage(mustaaAddress);
         }
         
-        for (uint256 i = 0; i < owners.length; i++) {
+        for (uint256 i = 0; i < owners.length; ++i) {
             address owner = owners[i];
             if (!yachtOwnership.isOwner(owner)) revert InvalidOwnership(owner, 0);
             
@@ -221,7 +218,7 @@ contract TimeToken is
         _mint(mustaaAddress, mustaaPerYear, true, abi.encode(year, "Annual allocation for Mustaa"));
         
         uint256 nonMustaaTotal = ownershipData.totalPercentage;
-        for (uint256 i = 0; i < owners.length; i++) {
+        for (uint256 i = 0; i < owners.length; ++i) {
             uint256 ownerShare = (ownerTotalAmount * ownershipData.percentages[i]) / nonMustaaTotal;
             _mint(owners[i], ownerShare, true, abi.encode(year, "Annual allocation for owner"));
         }
@@ -232,6 +229,10 @@ contract TimeToken is
      * @dev Mints tokens for specified years to Mustaa and owners based on yacht ownership.
      *      This function should be called atomically during proxy deployment via
      *      OpenZeppelin's upgradeable plugin to prevent front-running attacks.
+     *
+     * @dev `yearCount_` MAY be set to 0. In that case, no tokens are pre-minted during
+     *      initialization, allowing deployments where yearly minting is performed later
+     *      on a case-by-case basis (e.g., via `mintForOwners`).
      * 
      * @param name_ The name of the token
      * @param symbol_ The symbol of the token
@@ -241,13 +242,14 @@ contract TimeToken is
      * @param yachtOwnershipAddress_ The address of the YachtOwnership contract
      * @param allowListAddress_ The address of the AllowList contract
      * @param startingYear_ The first year to mint tokens for
-     * @param yearCount_ Number of consecutive years to pre-mint tokens for
+     * @param yearCount_ Number of consecutive years to pre-mint tokens for (may be 0)
      *
      * @custom:requirements
      * - owners_ must not be empty
      * - yachtOwnershipAddress_ must not be zero address
      * - All owners must have valid ownership percentages
      * - Total ownership percentage must equal 100%
+     * - `yearCount_` MAY be 0 (no tokens pre-minted during initialization)
      * @custom:security This function is protected by the `initializer` modifier and should
      *                  only be called atomically during proxy deployment to prevent front-running.
      */
@@ -287,7 +289,7 @@ contract TimeToken is
         uint256 currentYear = block.timestamp / 365 days + 1970;
         if (startingYear_ < currentYear) revert InvalidStartingYear(startingYear_, currentYear);
 
-        for (uint256 year = startingYear_; year < startingYear_ + yearCount_; year++) {
+        for (uint256 year = startingYear_; year < startingYear_ + yearCount_; ++year) {
             _mintYearlyTokens(year, owners_, ownershipData);
         }
     }
@@ -369,7 +371,7 @@ contract TimeToken is
         uint256 currentYear = block.timestamp / 365 days + 1970;
         if (year >= currentYear) revert TokensNotExpired(year, currentYear);
         
-        for (uint256 i = 0; i < tokenOwners.length; i++) {
+        for (uint256 i = 0; i < tokenOwners.length; ++i) {
             uint256 amount = balanceOfYear(tokenOwners[i], year);
             if (amount > 0) {
                 _burn(tokenOwners[i], amount, abi.encode(year, "Burning expired tokens"));
@@ -397,7 +399,7 @@ contract TimeToken is
     ) public virtual onlyOwner {
         OwnershipData memory ownershipData = _validateOwnership(owners);
         
-        for (uint256 y = 0; y < tokenYears.length; y++) {
+        for (uint256 y = 0; y < tokenYears.length; ++y) {
             uint256 year = tokenYears[y];
             _mintYearlyTokens(year, owners, ownershipData);
         }
@@ -469,28 +471,7 @@ contract TimeToken is
      * @return The number of decimals (1 for divisible tokens, 0 for non-divisible)
      */
     function decimals() public view virtual override returns (uint8) {
-        return _isNonDivisible ? 0 : 1;
-    }
-
-    /**
-     * @notice Returns the total balance of tokens for an address across all years.
-     * @dev Overrides the base implementation to sum yearly balances up to the current year.
-     *      This provides a unified view of all tokens owned by an address regardless of year.
-     *
-     * @param tokenOwner The address to check the balance for
-     * @return The total token balance across all years up to the current year
-     */
-    function balanceOf(
-        address tokenOwner
-    ) public view virtual override returns (uint256) {
-        uint256 currentYear = block.timestamp / 365 days + 1970;
-        uint256 totalBalance = 0;
-        
-        for (uint256 year = 1970; year <= currentYear; year++) {
-            totalBalance += _tokenOwnerYearlyBalances[year][tokenOwner];
-        }
-        
-        return totalBalance;
+        return 1;
     }
 
     /**
@@ -520,21 +501,35 @@ contract TimeToken is
     }
 
     /**
-     * @dev See {LSP7-_update}.
-     * @notice Handles token transfers with year-specific tracking.
-     * @dev Manages yearly balance tracking alongside base LSP7 storage. The `data` parameter
-     *      must contain the year as the first 32 bytes. Updates yearly balances and supply
-     *      accordingly for minting, burning, and transfers.
-     *
-     * @param from The address tokens are transferred from (address(0) for minting)
-     * @param to The address tokens are transferred to (address(0) for burning)
-     * @param amount The amount of tokens to transfer
-     * @param force Whether to force the transfer if the recipient doesn't implement LSP1
-     * @param data Additional data containing the year (first 32 bytes)
-     *
-     * @custom:requirements
-     * - `data` MUST contain at least 32 bytes with the year as the first element
-     */
+    * @dev See {LSP7-_update}.
+    * @notice Handles token transfers with year-specific tracking.
+    * @dev Manages yearly balance tracking alongside base LSP7 storage. The `data` parameter
+    *      must contain the year as the first 32 bytes. Updates yearly balances and supply
+    *      accordingly for minting, burning, and transfers.
+    *
+    * @dev INVARIANT:
+    *      For any address `A`, the sum of yearly balances across all years MUST always equal
+    *      the LSP7 base balance tracked by the parent contract:
+    *
+    *      Σ _tokenOwnerYearlyBalances[year][A] == _tokenOwnerBalances[A]
+    *
+    *      This invariant is maintained by ensuring that **all token movement (mint, burn,
+    *      transfer)** goes exclusively through this overridden `_update` function, which
+    *      updates yearly balances first and then delegates to `super._update` to update
+    *      the LSP7 base balances.
+    *
+    *      No function in this contract (or in derived contracts) MUST call `super._update`,
+    *      `_mint`, or `_burn` directly, as doing so would break this invariant.
+    *
+    * @param from The address tokens are transferred from (address(0) for minting)
+    * @param to The address tokens are transferred to (address(0) for burning)
+    * @param amount The amount of tokens to transfer
+    * @param force Whether to force the transfer if the recipient doesn't implement LSP1
+    * @param data Additional data containing the year (first 32 bytes)
+    *
+    * @custom:requirements
+    * - `data` MUST contain at least 32 bytes with the year as the first element
+    */
     function _update(
         address from,
         address to,
@@ -543,7 +538,7 @@ contract TimeToken is
         bytes memory data
     ) internal virtual override {
         if (data.length < 32) {
-            revert("LSP7Time: Invalid data format - year required");
+            revert YearNotProvided(data);
         }
 
         uint256 year = uint256(bytes32(data));
@@ -596,7 +591,7 @@ contract TimeToken is
             _verifyPermissions(from);
             
             if (data.length < 32) {
-                revert("LSP7Time: Invalid data format - year required");
+                revert YearNotProvided(data);
             }
             
             uint256 year = uint256(bytes32(data));
@@ -609,7 +604,7 @@ contract TimeToken is
             _verifyPermissions(to);
             
             if (data.length < 32) {
-                revert("LSP7Time: Invalid data format - year required");
+                revert YearNotProvided(data);
             }
             
             uint256 year = uint256(bytes32(data));
